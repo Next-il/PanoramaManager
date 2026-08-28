@@ -48,19 +48,19 @@ internal sealed class CustomHudNatives
 
     private readonly ILogger _logger;
 
-    private MemoryFunctionVoid<IntPtr, IntPtr, IntPtr, IntPtr>?         _setDialogVar;
-    private MemoryFunctionVoid<IntPtr, IntPtr, IntPtr, bool>?           _setHasClass;
-    private MemoryFunctionVoid<IntPtr, uint, IntPtr, IntPtr, bool>?     _setHasClassForPlayer;
-    private MemoryFunctionVoid<IntPtr, uint, bool>?                     _setInputCapture;
-    private MemoryFunctionWithReturn<IntPtr, IntPtr, IntPtr, bool>?     _internPanelId;
-    private MemoryFunctionWithReturn<IntPtr, IntPtr, IntPtr, bool>?     _internVarName;
-    private MemoryFunctionVoid<IntPtr, uint, uint, IntPtr>?             _writeDialogVar;
+    private static MemoryFunctionVoid<IntPtr, IntPtr, IntPtr, IntPtr>?         _setDialogVar;
+    private static MemoryFunctionVoid<IntPtr, IntPtr, IntPtr, bool>?           _setHasClass;
+    private static MemoryFunctionVoid<IntPtr, uint, IntPtr, IntPtr, bool>?     _setHasClassForPlayer;
+    private static MemoryFunctionVoid<IntPtr, uint, bool>?                     _setInputCapture;
+    private static MemoryFunctionWithReturn<IntPtr, IntPtr, IntPtr, bool>?     _internPanelId;
+    private static MemoryFunctionWithReturn<IntPtr, IntPtr, IntPtr, bool>?     _internVarName;
+    private static MemoryFunctionVoid<IntPtr, uint, uint, IntPtr>?             _writeDialogVar;
 
-    private int  _countOffset;
-    private int  _baseOffset;
-    private int  _stride;
-    private bool _resolved;
-    private bool _strideVerifiedBad;
+    private static int  _countOffset;
+    private static int  _baseOffset;
+    private static int  _stride;
+    private static bool _resolved;
+    private static bool _strideVerifiedBad;
 
     public CustomHudNatives(ILogger logger)
         => _logger = logger;
@@ -125,11 +125,34 @@ internal sealed class CustomHudNatives
             Marshal.FreeHGlobal(heap);
     }
 
+    private static readonly object ResolveLock = new();
+
+    /// <summary>
+    /// Binds every native once per load context.
+    ///
+    /// <para>The state behind this is static on purpose. It describes the running server binary, not
+    /// any one menu, and resolving it means seven pattern scans over the module - about 28ms on the
+    /// game thread. It used to be per-instance, and a renderer is created per <c>Panorama.Spawn</c>,
+    /// so every menu paid that scan again the first time it drew: a visible hitch on the first
+    /// toast, and another on the first weapon menu. Now Init's resolve at plugin load is the only
+    /// one, and opening a menu costs nothing.</para>
+    /// </summary>
     private void Resolve()
     {
         if (_resolved)
             return;
 
+        lock (ResolveLock)
+        {
+            if (_resolved)
+                return;
+
+            ResolveCore();
+        }
+    }
+
+    private void ResolveCore()
+    {
         _resolved = true;
 
         _setDialogVar         = Bind<MemoryFunctionVoid<IntPtr, IntPtr, IntPtr, IntPtr>>(KeySetDialogVariableString);
@@ -173,7 +196,7 @@ internal sealed class CustomHudNatives
 
     private static IntPtr Addr(BaseMemoryFunction? fn) => fn?.Handle ?? IntPtr.Zero;
 
-    private readonly List<string> _unresolved = [];
+    private static readonly List<string> _unresolved = [];
 
     /// <summary>Set once per plugin load context, so a plugin that opens menus repeatedly does not
     /// reprint the same complaint.</summary>
