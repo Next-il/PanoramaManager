@@ -1,0 +1,17 @@
+bin/
+obj/
+.build/
+*.user
+*.nupkg
+*.tsbuildinfo
+
+# Compiled layouts and local previews - source lives in workshop/
+*.vxml_c
+*.vcss_c
+*.preview.html
+previews/
+.DS_Store
+.idea/
+.vs/
+.vscode/
+workshop/previews/

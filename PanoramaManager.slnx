@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="PanoramaManager/PanoramaManager.csproj" />
+  <Project Path="Examples/AdminMenu/AdminMenu.csproj" />
+  <Project Path="Examples/AdminMenuKit/AdminMenuKit.csproj" />
+  <Project Path="Examples/TextInput/TextInput.csproj" />
+</Solution>

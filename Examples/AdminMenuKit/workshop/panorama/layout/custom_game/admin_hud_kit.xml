@@ -1,0 +1,124 @@
+<root>
+	<styles>
+		<include src="s2r://panorama/styles/custom_game/hud_shared.vcss_c" />
+		<include src="s2r://panorama/styles/custom_game/admin_hud_kit.vcss_c" />
+	</styles>
+
+	<!--
+		Kit-styled skin for HudMenu. Same ids and {s:vars} as admin_hud.xml - both implement
+		LayoutContract.Default, so the same C# drives either and switching is a layout path.
+
+		Two things this one adds:
+
+		  * Entry/exit animation. The root sits at opacity 0 and the server toggles "show" to fade
+		    and settle it in. Pick it with new LayoutContract { RevealClass = "show" }.
+		  * A server-driven accent colour. The server cannot send a colour, only strings and classes,
+		    so the palette is baked in as accent-* rules and the plugin names one via
+		    MenuHandle.SetVariant("accent", "red").
+
+		No tab bar: the example never registers tabs, and the buttons rendered as two empty blocks
+		because .kitmenu-tab had no width (so it sized to its children) while its label had
+		width: 100% (so it sized to its parent). That circle resolves to zero. See Workshop/README.md.
+	-->
+	<Panel class="kitmenu-screen" hittest="false">
+		<Panel id="HudMenuRoot" class="kitmenu-root kitmenu-panel">
+
+			<Panel class="kitmenu-head">
+				<Label class="kitmenu-title" text="{s:menu_title}" />
+				<Label class="kitmenu-tag" text="{s:menu_subtitle}" />
+				<Button id="menu_close" class="kitmenu-exit">
+					<Label class="kitmenu-nav-x" text="&#x2715;" />
+				</Button>
+			</Panel>
+
+			<Panel class="kitmenu-rows">
+				<Panel id="row0" class="kitmenu-row hidden">
+					<Button id="row0_btn" class="kitmenu-row-hit">
+						<Label class="kitmenu-key" text="1" />
+						<Label class="kitmenu-label" text="{s:row0_title}" />
+						<Label class="kitmenu-value" text="{s:row0_sub}" />
+					</Button>
+				</Panel>
+				<Panel id="row1" class="kitmenu-row hidden">
+					<Button id="row1_btn" class="kitmenu-row-hit">
+						<Label class="kitmenu-key" text="2" />
+						<Label class="kitmenu-label" text="{s:row1_title}" />
+						<Label class="kitmenu-value" text="{s:row1_sub}" />
+					</Button>
+				</Panel>
+				<Panel id="row2" class="kitmenu-row hidden">
+					<Button id="row2_btn" class="kitmenu-row-hit">
+						<Label class="kitmenu-key" text="3" />
+						<Label class="kitmenu-label" text="{s:row2_title}" />
+						<Label class="kitmenu-value" text="{s:row2_sub}" />
+					</Button>
+				</Panel>
+				<Panel id="row3" class="kitmenu-row hidden">
+					<Button id="row3_btn" class="kitmenu-row-hit">
+						<Label class="kitmenu-key" text="4" />
+						<Label class="kitmenu-label" text="{s:row3_title}" />
+						<Label class="kitmenu-value" text="{s:row3_sub}" />
+					</Button>
+				</Panel>
+				<Panel id="row4" class="kitmenu-row hidden">
+					<Button id="row4_btn" class="kitmenu-row-hit">
+						<Label class="kitmenu-key" text="5" />
+						<Label class="kitmenu-label" text="{s:row4_title}" />
+						<Label class="kitmenu-value" text="{s:row4_sub}" />
+					</Button>
+				</Panel>
+				<Panel id="row5" class="kitmenu-row hidden">
+					<Button id="row5_btn" class="kitmenu-row-hit">
+						<Label class="kitmenu-key" text="6" />
+						<Label class="kitmenu-label" text="{s:row5_title}" />
+						<Label class="kitmenu-value" text="{s:row5_sub}" />
+					</Button>
+				</Panel>
+				<Panel id="row6" class="kitmenu-row hidden">
+					<Button id="row6_btn" class="kitmenu-row-hit">
+						<Label class="kitmenu-key" text="7" />
+						<Label class="kitmenu-label" text="{s:row6_title}" />
+						<Label class="kitmenu-value" text="{s:row6_sub}" />
+					</Button>
+				</Panel>
+				<Panel id="row7" class="kitmenu-row hidden">
+					<Button id="row7_btn" class="kitmenu-row-hit">
+						<Label class="kitmenu-key" text="8" />
+						<Label class="kitmenu-label" text="{s:row7_title}" />
+						<Label class="kitmenu-value" text="{s:row7_sub}" />
+					</Button>
+				</Panel>
+				<Panel id="row8" class="kitmenu-row hidden">
+					<Button id="row8_btn" class="kitmenu-row-hit">
+						<Label class="kitmenu-key" text="9" />
+						<Label class="kitmenu-label" text="{s:row8_title}" />
+						<Label class="kitmenu-value" text="{s:row8_sub}" />
+					</Button>
+				</Panel>
+				<Panel id="row9" class="kitmenu-row hidden">
+					<Button id="row9_btn" class="kitmenu-row-hit">
+						<Label class="kitmenu-key" text="10" />
+						<Label class="kitmenu-label" text="{s:row9_title}" />
+						<Label class="kitmenu-value" text="{s:row9_sub}" />
+					</Button>
+				</Panel>
+			</Panel>
+
+			<Panel class="kitmenu-nav">
+				<Button id="nav_prev" class="kitmenu-nav-btn">
+					<Label class="kitmenu-nav-lbl" text="&#x2039;" />
+				</Button>
+				<Label class="kitmenu-page" text="{s:menu_page}" />
+				<Button id="nav_next" class="kitmenu-nav-btn">
+					<Label class="kitmenu-nav-lbl" text="&#x203a;" />
+				</Button>
+			</Panel>
+
+			<Panel class="kitmenu-foot">
+				<Label class="kitmenu-foot-text" text="{s:menu_footer}" />
+				<Label class="kitmenu-foot-tag" text="{s:uptime}" />
+			</Panel>
+
+		</Panel>
+	</Panel>
+</root>

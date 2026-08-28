@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>PanoramaManager</AssemblyName>
+    <RootNamespace>HudMenu</RootNamespace>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <PackageId>PanoramaManager</PackageId>
+    <Description>Helper library for building server-driven CS2 HUD menus on CounterStrikeSharp.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CounterStrikeSharp.API" Version="$(CounterStrikeSharpVersion)"
+                      ExcludeAssets="runtime" />
+  </ItemGroup>
+
+</Project>

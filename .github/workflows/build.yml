@@ -1,0 +1,100 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    # GITHUB_TOKEN is read-only by default on repos created since 2023.
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build
+        run: dotnet build PanoramaManager.slnx -c Release --nologo
+
+      - name: Stage release layout
+        run: |
+          mkdir -p out/lib out/gamedata out/plugins out/workshop/panorama
+          cp .build/plugins/AdminMenu/PanoramaManager.dll out/lib/
+          cp gamedata/panoramamanager.json                       out/gamedata/
+          cp -r .build/plugins/AdminMenu                 out/plugins/
+          cp -r .build/plugins/AdminMenuKit              out/plugins/
+          cp -r .build/plugins/TextInput                 out/plugins/
+          # Each example owns its layout, so gather them rather than assuming one shared folder.
+          cp -r PanoramaManager/workshop/panorama/. out/workshop/panorama/
+          for ex in Examples/*/workshop/panorama; do cp -r "$ex/." out/workshop/panorama/; done
+          find out -name '*.pdb' -delete
+
+      - name: Verify the layout
+        run: |
+          set -e
+          test -f out/lib/PanoramaManager.dll
+          test -f out/gamedata/panoramamanager.json
+          test -f out/workshop/panorama/styles/custom_game/hud_shared.css
+
+          # Every layout an example asks for has to actually ship, or the plugin loads and points at
+          # nothing. Checked here because the failure is silent in game.
+          for name in $(grep -rhoE 'panorama/layout/custom_game/[a-z_]+\.vxml_c' Examples --include='*.cs' \
+                        | sed 's|.*/||; s|\.vxml_c||' | sort -u); do
+            if [ ! -f "out/workshop/panorama/layout/custom_game/${name}.xml" ]; then
+              echo "::error::Examples reference ${name}.vxml_c but workshop/ has no ${name}.xml"
+              exit 1
+            fi
+            echo "  ${name}.xml present"
+          done
+
+          # Each plugin folder must carry the library, since CounterStrikeSharp probes the plugin's
+          # own directory.
+          for p in out/plugins/*/; do
+            test -f "${p}PanoramaManager.dll" || { echo "::error::${p} is missing PanoramaManager.dll"; exit 1; }
+          done
+
+          find out -type f | sort
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: panoramamanager
+          path: out/
+
+      - name: Work out the next version
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          latest=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)
+          current=$(echo "${latest}" | grep -oE '[0-9]+$' || echo 0)
+          next=$((current + 1))
+          echo "previous: ${latest:-none}  next: v${next}"
+          echo "tag=v${next}" >> "$GITHUB_OUTPUT"
+
+      - name: Package
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: cd out && zip -qr "../panoramamanager-${{ steps.version.outputs.tag }}.zip" . -x '*.DS_Store'
+
+      - name: Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            "panoramamanager-${{ steps.version.outputs.tag }}.zip" \
+            --target "${{ github.sha }}" \
+            --title "${{ steps.version.outputs.tag }}" \
+            --generate-notes

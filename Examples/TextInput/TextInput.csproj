@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>TextInput</AssemblyName>
+    <RootNamespace>HudMenu.Example</RootNamespace>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <OutputPath>$(MSBuildThisFileDirectory)..\..\.build\plugins\TextInput\</OutputPath>
+    <!-- Don't drag the referenced project's .xml doc file into the plugin folder. Keep .pdb so
+         CounterStrikeSharp can print real line numbers when a handler throws. -->
+    <AllowedReferenceRelatedFileExtensions>.pdb</AllowedReferenceRelatedFileExtensions>
+    <!-- Consumers of the library don't need their own doc file either. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Copied next to the plugin. CounterStrikeSharp loads each plugin through McMaster's
+         PluginLoader, whose load context probes the plugin's own folder, so a sibling DLL resolves
+         without any extra setup. -->
+    <ProjectReference Include="..\..\PanoramaManager\PanoramaManager.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CounterStrikeSharp.API" Version="$(CounterStrikeSharpVersion)"
+                      ExcludeAssets="runtime" />
+  </ItemGroup>
+
+</Project>

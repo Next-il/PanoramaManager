@@ -1,0 +1,257 @@
+/*
+    HudMenu - styling for admin_hud.xml.
+
+    Panorama CSS, not web CSS. Notable differences:
+      * visibility: collapse removes a panel from layout (display:none has no equivalent).
+        This is what makes an unused row leave no gap.
+      * flow-children replaces flex-direction. There is no flex, no grid, no display.
+      * Colors accept #rrggbbaa. No rgb(), no hsl(), no var(), no calc().
+      * box-shadow puts the COLOUR FIRST: "#colour x y blur spread", not the web order.
+      * transitions use the split form (transition-property / -duration / -timing-function).
+        The web shorthand is unproven here; the 19-layout community kit never uses it.
+
+    Every property here was checked against the Panorama CSS reference in the skills bundle,
+    which is the property vocabulary read out of libpanorama.so. If you add a property, check it
+    there first - an unregistered one is silently ignored, not reported.
+
+    All state is driven by classes the server toggles: hidden, active, disabled, has-pages.
+    There is no scripting in this layout by design - see the note in admin_hud.xml.
+*/
+
+/*
+    The root panel cannot carry an id (the compiler rejects it), so this anonymous wrapper is the
+    root and HudMenuRoot sits inside it. Purely structural.
+*/
+.hudmenu-viewport {
+    width: 100%;
+    height: 100%;
+}
+
+.hudmenu-root {
+    width: 100%;
+    height: 100%;
+    flow-children: down;
+    horizontal-align: center;
+    vertical-align: center;
+}
+
+.hudmenu-scrim {
+    width: 100%;
+    height: 100%;
+    background-color: #00000099;
+    z-index: -1;
+    /*
+        .hudmenu-root is flow-children: down, so without this the scrim consumes the full root
+        height as a flowing sibling and the card flows off the bottom of the screen. An overlay
+        has to leave the flow.
+    */
+    ignore-parent-flow: true;
+}
+
+.hudmenu-card {
+    width: 620px;
+    flow-children: down;
+    padding: 20px;
+    border-radius: 6px;
+    background-color: gradient(linear, 0% 0%, 0% 100%, from(#242832f2), to(#181a22f7));
+    box-shadow: #00000099 0px 4px 24px 0px;
+    horizontal-align: center;
+    vertical-align: center;
+}
+
+/* Header ------------------------------------------------------------------ */
+
+.hudmenu-header {
+    width: 100%;
+    flow-children: right;
+}
+
+.hudmenu-title-block {
+    flow-children: down;
+    width: fill-parent-flow(1.0);
+}
+
+.hudmenu-title {
+    font-size: 24px;
+    font-weight: bold;
+    color: #ffffff;
+}
+
+.hudmenu-subtitle {
+    font-size: 13px;
+    color: #f0a92a;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+}
+
+.hudmenu-close {
+    width: 28px;
+    height: 28px;
+    vertical-align: center;
+}
+
+.hudmenu-divider {
+    width: 100%;
+    height: 1px;
+    margin-top: 12px;
+    margin-bottom: 12px;
+    background-color: #ffffff1a;
+}
+
+/* Tabs -------------------------------------------------------------------- */
+
+.hudmenu-tabs {
+    width: 100%;
+    flow-children: right;
+    margin-bottom: 12px;
+}
+
+.hudmenu-tab {
+    padding: 6px 16px;
+    margin-right: 6px;
+    border-radius: 4px;
+    background-color: #ffffff0d;
+    color: #b9bec9;
+    font-size: 14px;
+    transition-property: background-color, color;
+    transition-duration: 0.12s;
+    transition-timing-function: ease-in-out;
+}
+
+.hudmenu-tab:hover {
+    background-color: #ffffff1f;
+    color: #ffffff;
+}
+
+/* Server toggles this via SetClass(slot, "tab_<id>", "active", true). */
+.hudmenu-tab.active {
+    background-color: #4a90d9;
+    color: #ffffff;
+}
+
+/* Rows -------------------------------------------------------------------- */
+
+.hudmenu-rows {
+    width: 100%;
+    flow-children: down;
+}
+
+.hudmenu-row {
+    width: 100%;
+    margin-bottom: 4px;
+}
+
+/*
+    The single most important rule in this file. Rows the server didn't fill get class="hidden",
+    and collapse takes them out of layout entirely - so a 10-row pool showing 3 rows looks exactly
+    like a 3-row list. Using opacity or transparency here would leave seven empty gaps.
+*/
+
+.hudmenu-row-hit {
+    width: 100%;
+    flow-children: right;
+    padding: 10px;
+    border-radius: 4px;
+    background-color: #ffffff0a;
+    transition-property: background-color;
+    transition-duration: 0.1s;
+    transition-timing-function: ease-in-out;
+}
+
+.hudmenu-row-hit:hover {
+    background-color: #ffffff1a;
+}
+
+.hudmenu-row.disabled {
+    opacity: 0.4;
+}
+
+.hudmenu-row-index {
+    width: 28px;
+    height: 28px;
+    border-radius: 3px;
+    background-color: #f0a92a33;
+    vertical-align: center;
+    margin-right: 12px;
+}
+
+.hudmenu-row-index-text {
+    font-size: 14px;
+    font-weight: bold;
+    color: #f0a92a;
+    horizontal-align: center;
+    vertical-align: center;
+}
+
+.hudmenu-row-copy {
+    flow-children: down;
+    width: fill-parent-flow(1.0);
+    vertical-align: center;
+}
+
+.hudmenu-row-title {
+    font-size: 16px;
+    color: #ffffff;
+}
+
+.hudmenu-row-sub {
+    font-size: 12px;
+    color: #8b92a0;
+}
+
+/* Nav --------------------------------------------------------------------- */
+
+/*
+    Hidden until the server sets "has-pages" on the root, which it does only when
+    PageCount > 1. A single-page menu shows no pager at all.
+*/
+.hudmenu-nav {
+    width: 100%;
+    flow-children: right;
+    margin-top: 12px;
+    horizontal-align: center;
+    visibility: collapse;
+}
+
+.hudmenu-root.has-pages .hudmenu-nav {
+    visibility: visible;
+}
+
+.hudmenu-nav-btn {
+    padding: 6px 14px;
+    border-radius: 4px;
+    background-color: #ffffff0d;
+    color: #b9bec9;
+    font-size: 13px;
+}
+
+.hudmenu-nav-btn:hover {
+    background-color: #ffffff1f;
+    color: #ffffff;
+}
+
+.hudmenu-page {
+    font-size: 13px;
+    color: #8b92a0;
+    margin: 0px 14px;
+    vertical-align: center;
+}
+
+/* Footer ------------------------------------------------------------------ */
+
+.hudmenu-footer {
+    width: 100%;
+    flow-children: right;
+    margin-top: 14px;
+}
+
+.hudmenu-footer-text {
+    font-size: 11px;
+    color: #5c6270;
+    width: fill-parent-flow(1.0);
+}
+
+.hudmenu-uptime {
+    font-size: 11px;
+    color: #5c6270;
+}

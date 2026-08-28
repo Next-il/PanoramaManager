@@ -1,0 +1,282 @@
+/*
+    hudmenu_kit - second skin for HudMenu, adapted from the community kit in the skills bundle.
+
+    Same contract as admin_hud.css, different look. Every value here was checked against
+    the Panorama CSS reference in the skills bundle - no display, no flex, no calc(), no rgb(),
+    box-shadow takes the colour first, and transitions use the split form.
+
+    Two mechanisms worth understanding before editing:
+
+    THE REVEAL. The root is opacity 0 with a transform offset, and gains "show" when the server
+    opens the menu. The transition does the rest. Closing removes the class and it fades back out.
+    This replaces the collapse-based hide used by admin_hud.css - a collapsed panel cannot animate,
+    because it is not in layout to animate from.
+
+    THE ACCENT. The server can send strings and toggle classes. It cannot send a colour. So the
+    palette lives here as accent-* classes and the plugin picks one by name. Adding a colour means
+    adding a rule here and shipping a new VPK, so err on the side of more of them than you need.
+*/
+
+/* z-index on the OUTERMOST panel - it only orders siblings within one parent, so an inner
+   one cannot clear the game's own HUD. */
+.kitmenu-screen {
+    width: 100%;
+    height: 100%;
+    z-index: 99999;
+}
+
+/* Reveal ------------------------------------------------------------------ */
+
+.kitmenu-root {
+    /*
+        The kit's own layouts are ~300px because they are passive widgets read at a glance. This one
+        is a menu you point at and click, so it needs room for a name, a ping, and a hit target that
+        is not a coin toss.
+    */
+    width: 420px;
+    flow-children: down;
+    horizontal-align: center;
+    vertical-align: center;
+
+    opacity: 0;
+    transform: translateY(10px) scale3d(0.98, 0.98, 1);
+    brightness: 2.5;
+    transition-property: opacity, transform, brightness;
+    transition-duration: 0.20s;
+    transition-timing-function: ease-out;
+}
+
+/* Server toggles this on open. Removing it plays the same transition in reverse. */
+.kitmenu-root.show {
+    opacity: 1;
+    transform: translateY(0px) scale3d(1, 1, 1);
+    brightness: 1;
+}
+
+/* Placement - the server picks one, same idea as the accent. */
+
+/* Card -------------------------------------------------------------------- */
+
+.kitmenu-panel {
+    border-radius: 3px;
+    border-left: 3px solid #f0a531;
+    background-color: gradient(linear, 0% 0%, 0% 100%, from(#12171ee8), to(#0b0f14f2));
+    box-shadow: #000000c0 0px 8px 30px 0px;
+}
+
+/*
+    Accent palette. Only border-left-color changes, so a new colour is one line. The plugin calls
+    SetVariant("accent", "red") and the library toggles accent-red on the root.
+*/
+.kitmenu-panel.accent-gold   { border-left-color: #f0a531; }
+.kitmenu-panel.accent-red    { border-left-color: #e0432f; }
+.kitmenu-panel.accent-blue   { border-left-color: #56a0dd; }
+.kitmenu-panel.accent-green  { border-left-color: #4caf6d; }
+.kitmenu-panel.accent-purple { border-left-color: #9b6cd6; }
+.kitmenu-panel.accent-plain  { border-left-color: #5a636d; }
+
+/* Header ------------------------------------------------------------------ */
+
+.kitmenu-head {
+    flow-children: right;
+    width: 100%;
+    padding: 11px 13px 9px 13px;
+    border-bottom: 1px solid #ffffff0a;
+}
+
+.kitmenu-title {
+    width: fill-parent-flow(1.0);
+    font-family: Stratum2 Medium Condensed;
+    font-size: 17px;
+    color: #ffffff;
+    text-transform: uppercase;
+    letter-spacing: 1.6px;
+    vertical-align: center;
+}
+
+.kitmenu-tag {
+    font-family: Stratum2 Mono;
+    font-size: 11px;
+    color: #61686f;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    vertical-align: center;
+    margin-right: 8px;
+}
+
+.kitmenu-exit {
+    width: 18px;
+    height: 18px;
+    border-radius: 2px;
+    vertical-align: center;
+    transition-property: background-color;
+    transition-duration: 0.1s;
+    transition-timing-function: ease-in-out;
+}
+
+.kitmenu-exit:hover { background-color: #e0432f; }
+
+.kitmenu-nav-x {
+    width: 100%;
+    height: 100%;
+    font-size: 11px;
+    color: #9aa2ac;
+    text-align: center;
+    vertical-align: center;
+}
+
+.kitmenu-exit:hover .kitmenu-nav-x { color: #ffffff; }
+
+/* Tabs -------------------------------------------------------------------- */
+
+.kitmenu-tabs {
+    flow-children: right;
+    width: 100%;
+    padding: 8px 9px 4px 9px;
+}
+
+.kitmenu-tab {
+    height: 22px;
+    padding: 0px 11px;
+    margin-right: 4px;
+    border-radius: 2px;
+    background-color: #ffffff08;
+    transition-property: background-color;
+    transition-duration: 0.1s;
+    transition-timing-function: ease-in-out;
+}
+
+.kitmenu-tab:hover  { background-color: #ffffff14; }
+.kitmenu-tab.active { background-color: #f0a5312a; }
+
+.kitmenu-tab-lbl {
+    width: 100%;
+    height: 100%;
+    font-family: Stratum2 Medium Condensed;
+    font-size: 12px;
+    color: #9aa2ac;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    text-align: center;
+    vertical-align: center;
+}
+
+.kitmenu-tab.active .kitmenu-tab-lbl { color: #f0a531; }
+
+/* Rows -------------------------------------------------------------------- */
+
+.kitmenu-rows {
+    flow-children: down;
+    width: 100%;
+}
+
+.kitmenu-row { width: 100%; }
+
+.kitmenu-row-hit {
+    flow-children: right;
+    width: 100%;
+    padding: 10px 14px;
+    border-bottom: 1px solid #ffffff0a;
+    transition-property: background-color;
+    transition-duration: 0.1s;
+    transition-timing-function: ease-in-out;
+}
+
+.kitmenu-row-hit:hover { background-color: #ffffff0a; }
+
+.kitmenu-row.disabled { opacity: 0.3; }
+
+.kitmenu-key {
+    width: 20px;
+    font-family: Stratum2 Mono;
+    font-size: 12px;
+    color: #61686f;
+    vertical-align: center;
+}
+
+.kitmenu-label {
+    width: fill-parent-flow(1.0);
+    font-family: Stratum2;
+    font-size: 14px;
+    color: #c8ced6;
+    text-overflow: ellipsis;
+    vertical-align: center;
+}
+
+.kitmenu-row-hit:hover .kitmenu-label { color: #ffffff; }
+
+.kitmenu-value {
+    font-family: Stratum2 Mono;
+    font-size: 12px;
+    color: #61686f;
+    text-align: right;
+    vertical-align: center;
+}
+
+/* Nav --------------------------------------------------------------------- */
+
+.kitmenu-nav {
+    flow-children: right;
+    width: 100%;
+    padding: 6px 9px;
+    horizontal-align: center;
+    visibility: collapse;
+}
+
+/* Server sets has-pages on the root only when PageCount > 1. */
+.kitmenu-root.has-pages .kitmenu-nav { visibility: visible; }
+
+.kitmenu-nav-btn {
+    width: 22px;
+    height: 20px;
+    margin: 0px 3px;
+    border-radius: 2px;
+    background-color: #ffffff08;
+    vertical-align: center;
+}
+
+.kitmenu-nav-btn:hover { background-color: #ffffff14; }
+
+.kitmenu-nav-lbl {
+    width: 100%;
+    height: 100%;
+    font-size: 13px;
+    color: #9aa2ac;
+    text-align: center;
+    vertical-align: center;
+}
+
+.kitmenu-page {
+    font-family: Stratum2 Mono;
+    font-size: 11px;
+    color: #61686f;
+    letter-spacing: 1px;
+    vertical-align: center;
+    margin: 0px 8px;
+}
+
+/* Footer ------------------------------------------------------------------ */
+
+.kitmenu-foot {
+    flow-children: right;
+    width: 100%;
+    padding: 7px 13px 9px 13px;
+    border-top: 1px solid #ffffff0a;
+}
+
+.kitmenu-foot-text {
+    width: fill-parent-flow(1.0);
+    font-family: Stratum2 Mono;
+    font-size: 10px;
+    color: #4b525a;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    vertical-align: center;
+}
+
+.kitmenu-foot-tag {
+    font-family: Stratum2 Mono;
+    font-size: 10px;
+    color: #4b525a;
+    vertical-align: center;
+}
