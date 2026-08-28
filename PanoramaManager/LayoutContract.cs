@@ -14,7 +14,7 @@ public sealed class LayoutContract
     /// <summary>Panel whose dialog variables carry the whole menu's state. Panorama scopes dialog
     /// variables to the panel they're set on, so a single root panel keeps every write in one place.
     /// A layout that sets variables per-row should set this to null and rely on <see cref="RowPanelId"/>.</summary>
-    public string RootPanelId { get; init; } = "HudMenuRoot";
+    public string RootPanelId { get; init; } = "PanoramaRoot";
 
     /// <summary>Number of physical row panels declared in the layout. This is the page size -
     /// the renderer never shows more rows than this and paginates past it.</summary>

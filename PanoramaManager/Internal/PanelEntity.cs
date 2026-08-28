@@ -72,7 +72,7 @@ internal sealed class PanelEntity
         var pointer = VirtualFunctions.UTIL_CreateEntityByName(ClassName, -1);
         if (pointer == IntPtr.Zero)
         {
-            _logger.LogWarning("[HudMenu] UTIL_CreateEntityByName({ClassName}) returned null.", ClassName);
+            _logger.LogWarning("[Panorama] UTIL_CreateEntityByName({ClassName}) returned null.", ClassName);
             return null;
         }
 
@@ -93,15 +93,15 @@ internal sealed class PanelEntity
 
         if (!entity.IsValid)
         {
-            _logger.LogWarning("[HudMenu] DispatchSpawn({ClassName}) left an invalid entity.", ClassName);
+            _logger.LogWarning("[Panorama] DispatchSpawn({ClassName}) left an invalid entity.", ClassName);
             return null;
         }
 
         _index = entity.Index;
         PanelRegistry.RegisterLayout(entity.Index, _layoutPath);
 
-        _logger.LogInformation(
-            "[HudMenu] Spawned {ClassName} index={Index} layout='{Layout}'", ClassName, entity.Index, _layoutPath);
+        _logger.LogDebug(
+            "[Panorama] Spawned {ClassName} index={Index} layout='{Layout}'", ClassName, entity.Index, _layoutPath);
 
         return entity;
     }

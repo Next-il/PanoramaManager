@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using CounterStrikeSharp.API.Modules.Memory;
@@ -75,33 +77,52 @@ internal sealed class CustomHudNatives
     }
 
     /// <summary>
-    /// A <c>CUtlString</c> the natives can take the address of. The engine's type is
-    /// <c>Size=8 { char* }</c>, so this is two allocations: the char buffer, and the 8-byte struct
-    /// that points at it. The natives deep-copy, so both are ours to free once the call returns.
+    /// Longest string written without touching the heap. Panel ids, class names and weapon labels
+    /// are all far short of this; a player name or a footer line is the realistic worst case.
     /// </summary>
-    private readonly struct UtlString : IDisposable
+    private const int InlineBytes = 256;
+
+    /// <summary>
+    /// Writes <paramref name="value"/> as a null-terminated UTF-8 string into <paramref name="inline"/>,
+    /// falling back to the heap only if it does not fit.
+    ///
+    /// <para>The engine's <c>CUtlString</c> is <c>Size=8 { char* }</c> - verified against the
+    /// disassembly, where the setter does <c>mov rcx, [rsi]</c> and then walks the string. It reads
+    /// and hashes; it never stores the pointer or takes ownership, so the memory only has to outlive
+    /// the call.</para>
+    ///
+    /// <para>That is what makes stack memory safe here, and it matters: a full grid render was doing
+    /// roughly 2,800 <c>AllocHGlobal</c>/<c>FreeHGlobal</c> pairs, every one of them on the game
+    /// thread. Now it does none in the common case.</para>
+    /// </summary>
+    private static unsafe byte* Encode(string? value, byte* inline, ref IntPtr heap)
     {
-        private readonly IntPtr _chars;
+        value ??= string.Empty;
 
-        public IntPtr Ptr { get; }
+        // GetMaxByteCount rather than GetByteCount: cheaper, and being generous only costs stack.
+        var needed = Encoding.UTF8.GetMaxByteCount(value.Length) + 1;
 
-        public UtlString(string value)
+        if (needed <= InlineBytes)
         {
-            var bytes = Encoding.UTF8.GetBytes(value);
+            var count = Encoding.UTF8.GetBytes(value, new Span<byte>(inline, InlineBytes - 1));
+            inline[count] = 0;
 
-            _chars = Marshal.AllocHGlobal(bytes.Length + 1);
-            Marshal.Copy(bytes, 0, _chars, bytes.Length);
-            Marshal.WriteByte(_chars, bytes.Length, 0);
-
-            Ptr = Marshal.AllocHGlobal(IntPtr.Size);
-            Marshal.WriteIntPtr(Ptr, _chars);
+            return inline;
         }
 
-        public void Dispose()
-        {
-            Marshal.FreeHGlobal(Ptr);
-            Marshal.FreeHGlobal(_chars);
-        }
+        heap = Marshal.AllocHGlobal(needed);
+
+        var written = Encoding.UTF8.GetBytes(value, new Span<byte>((void*) heap, needed - 1));
+        ((byte*) heap)[written] = 0;
+
+        return (byte*) heap;
+    }
+
+    /// <summary>Frees whatever <see cref="Encode"/> put on the heap. Almost always a no-op.</summary>
+    private static void Release(IntPtr heap)
+    {
+        if (heap != IntPtr.Zero)
+            Marshal.FreeHGlobal(heap);
     }
 
     private void Resolve()
@@ -125,18 +146,75 @@ internal sealed class CustomHudNatives
 
         VerifyStride();
 
-        _logger.LogInformation("[HudMenu] gamedata: {Source}", PanoramaGameData.Source);
-        _logger.LogInformation(
-            "[HudMenu] natives - DVar=0x{DVar:X} HCls=0x{HCls:X} HClsP=0x{HClsP:X} Input=0x{Input:X} "
-            + "InternPanel=0x{IP:X} InternVar=0x{IV:X} WriteVar=0x{WV:X} | states +0x{Count:X}/+0x{Base:X} stride 0x{Stride:X}",
-            _setDialogVar?.Handle         ?? IntPtr.Zero,
-            _setHasClass?.Handle          ?? IntPtr.Zero,
-            _setHasClassForPlayer?.Handle ?? IntPtr.Zero,
-            _setInputCapture?.Handle      ?? IntPtr.Zero,
-            _internPanelId?.Handle        ?? IntPtr.Zero,
-            _internVarName?.Handle        ?? IntPtr.Zero,
-            _writeDialogVar?.Handle       ?? IntPtr.Zero,
-            _countOffset, _baseOffset, _stride);
+// Nothing is logged on a healthy start. Every plugin referencing this library loads its
+        // own copy in its own context, so anything printed here is printed once per plugin - which
+        // is how a working server ends up with a screenful of identical startup noise.
+        // `css_panorama_diag` prints the full table on demand instead.
+        Announce();
+    }
+
+    /// <summary>The full native table, for <c>css_panorama_diag</c>. This used to be printed at
+    /// every plugin load; on demand is the right place for it.</summary>
+    internal IEnumerable<string> Describe()
+    {
+        Resolve();
+
+        yield return $"gamedata: {PanoramaGameData.Source}";
+        yield return $"natives:  DVar=0x{Addr(_setDialogVar):X} HCls=0x{Addr(_setHasClass):X} "
+                   + $"HClsP=0x{Addr(_setHasClassForPlayer):X} Input=0x{Addr(_setInputCapture):X}";
+        yield return $"          InternPanel=0x{Addr(_internPanelId):X} InternVar=0x{Addr(_internVarName):X} "
+                   + $"WriteVar=0x{Addr(_writeDialogVar):X}";
+        yield return $"states:   +0x{_countOffset:X}/+0x{_baseOffset:X} stride 0x{_stride:X}"
+                   + (_strideVerifiedBad ? " (MISMATCH - per-player writes disabled)" : "");
+
+        if (_unresolved.Count > 0)
+            yield return $"unresolved: {string.Join(", ", _unresolved)}";
+    }
+
+    private static IntPtr Addr(BaseMemoryFunction? fn) => fn?.Handle ?? IntPtr.Zero;
+
+    private readonly List<string> _unresolved = [];
+
+    /// <summary>Set once per plugin load context, so a plugin that opens menus repeatedly does not
+    /// reprint the same complaint.</summary>
+    private static bool _announced;
+
+    /// <summary>
+    /// The whole startup output. Silent when everything works, which is the normal case.
+    ///
+    /// <para>Two things are worth interrupting a server operator for, and neither is "it loaded".
+    /// One is a missing gamedata file, because the compiled-in fallback is a snapshot that a CS2
+    /// update will quietly invalidate. The other is a signature that did not resolve, because the
+    /// menu will render and then do nothing.</para>
+    /// </summary>
+    private void Announce()
+    {
+        if (_announced)
+            return;
+
+        _announced = true;
+
+        if (!PanoramaGameData.FileFound)
+        {
+            _logger.LogError(
+                "[Panorama] no {File} in addons/counterstrikesharp/gamedata - running on compiled-in "
+                + "signatures, which are a snapshot of one CS2 build and will stop working after an "
+                + "update. Download it from {Url} and drop it in that folder.",
+                "panoramamanager.json",
+                "https://github.com/Next-il/PanoramaManager/releases/latest");
+        }
+
+        if (_unresolved.Count > 0)
+        {
+            _logger.LogError(
+                "[Panorama] {Count} native(s) did not resolve ({Keys}) - menus will render but "
+                + "misbehave. The signatures need re-deriving for this CS2 build; update {File} from "
+                + "{Url}.",
+                _unresolved.Count,
+                string.Join(", ", _unresolved),
+                "panoramamanager.json",
+                "https://github.com/Next-il/PanoramaManager/releases/latest");
+        }
     }
 
     /// <summary>Binds a signature from gamedata, or null if it is missing or didn't resolve.
@@ -146,7 +224,7 @@ internal sealed class CustomHudNatives
     {
         if (PanoramaGameData.Signature(key) is not { } signature)
         {
-            _logger.LogWarning("[HudMenu] no signature for {Key} on this platform.", key);
+            _unresolved.Add(key);
 
             return null;
         }
@@ -158,11 +236,12 @@ internal sealed class CustomHudNatives
             if (fn.Handle != IntPtr.Zero)
                 return fn;
 
-            _logger.LogWarning("[HudMenu] {Key} did not resolve.", key);
+            _unresolved.Add(key);
         }
         catch (Exception e)
         {
-            _logger.LogWarning(e, "[HudMenu] {Key} failed to bind.", key);
+            _unresolved.Add(key);
+            _logger.LogDebug(e, "[Panorama] {Key} failed to bind.", key);
         }
 
         return null;
@@ -201,13 +280,13 @@ internal sealed class CustomHudNatives
 
             if (actual == _stride)
             {
-                _logger.LogInformation(
-                    "[HudMenu] stride 0x{Stride:X} confirmed against schema {Class}", _stride, candidate);
+                _logger.LogDebug(
+                    "[Panorama] stride 0x{Stride:X} confirmed against schema {Class}", _stride, candidate);
             }
             else
             {
                 _logger.LogError(
-                    "[HudMenu] stride mismatch: gamedata says 0x{Configured:X}, schema {Class} says "
+                    "[Panorama] stride mismatch: gamedata says 0x{Configured:X}, schema {Class} says "
                     + "0x{Actual:X}. Per-player writes DISABLED - they would compute a wrong address. "
                     + "Update CCSCustomHudLayout_PlayerStateStride in gamedata/panoramamanager.json.",
                     _stride, candidate, actual);
@@ -218,8 +297,8 @@ internal sealed class CustomHudNatives
             return;
         }
 
-        _logger.LogInformation(
-            "[HudMenu] stride 0x{Stride:X} could not be schema-verified - no known state class. "
+        _logger.LogDebug(
+            "[Panorama] stride 0x{Stride:X} could not be schema-verified - no known state class. "
             + "Proceeding on the gamedata value.", _stride);
     }
 
@@ -251,34 +330,71 @@ internal sealed class CustomHudNatives
     }
 
     /// <summary>Global-state text injection - every viewer of the layout sees it.</summary>
-    public bool SetDialogVariableString(IntPtr entity, string panelId, string variableName, string value)
+    // The stackalloc buffers below are fully written by Encode before anything reads them,
+    // so the implicit zeroing is pure waste at ~1,400 calls a render.
+    [SkipLocalsInit]
+    public unsafe bool SetDialogVariableString(IntPtr entity, string panelId, string variableName, string value)
     {
         Resolve();
 
         if (_setDialogVar is not { } fn)
             return false;
 
-        using var pPanel = new UtlString(panelId);
-        using var pName  = new UtlString(variableName);
-        using var pValue = new UtlString(value);
+        // Three char buffers and three 8-byte CUtlStrings, all on the stack.
+        byte* c0 = stackalloc byte[InlineBytes];
+        byte* c1 = stackalloc byte[InlineBytes];
+        byte* c2 = stackalloc byte[InlineBytes];
+        byte** utl = stackalloc byte*[3];
 
-        fn.Invoke(entity, pPanel.Ptr, pName.Ptr, pValue.Ptr);
+        IntPtr h0 = IntPtr.Zero, h1 = IntPtr.Zero, h2 = IntPtr.Zero;
+
+        try
+        {
+            utl[0] = Encode(panelId, c0, ref h0);
+            utl[1] = Encode(variableName, c1, ref h1);
+            utl[2] = Encode(value, c2, ref h2);
+
+            fn.Invoke(entity, (IntPtr) (utl + 0), (IntPtr) (utl + 1), (IntPtr) (utl + 2));
+        }
+        finally
+        {
+            Release(h0);
+            Release(h1);
+            Release(h2);
+        }
 
         return true;
     }
 
     /// <summary>Global-state class toggle.</summary>
-    public bool SetHasClass(IntPtr entity, string panelId, string className, bool hasClass)
+    // The stackalloc buffers below are fully written by Encode before anything reads them,
+    // so the implicit zeroing is pure waste at ~1,400 calls a render.
+    [SkipLocalsInit]
+    public unsafe bool SetHasClass(IntPtr entity, string panelId, string className, bool hasClass)
     {
         Resolve();
 
         if (_setHasClass is not { } fn)
             return false;
 
-        using var pPanel = new UtlString(panelId);
-        using var pClass = new UtlString(className);
+        byte* c0 = stackalloc byte[InlineBytes];
+        byte* c1 = stackalloc byte[InlineBytes];
+        byte** utl = stackalloc byte*[2];
 
-        fn.Invoke(entity, pPanel.Ptr, pClass.Ptr, hasClass);
+        IntPtr h0 = IntPtr.Zero, h1 = IntPtr.Zero;
+
+        try
+        {
+            utl[0] = Encode(panelId, c0, ref h0);
+            utl[1] = Encode(className, c1, ref h1);
+
+            fn.Invoke(entity, (IntPtr) (utl + 0), (IntPtr) (utl + 1), hasClass);
+        }
+        finally
+        {
+            Release(h0);
+            Release(h1);
+        }
 
         return true;
     }
@@ -289,7 +405,10 @@ internal sealed class CustomHudNatives
     /// into that slot's state. The engine's own <c>...ForPlayer</c> entry point is skipped because it
     /// never stores the value; see the class remarks.
     /// </summary>
-    public bool SetDialogVariableStringForPlayer(IntPtr entity, uint slot, string panelId, string variableName, string value)
+    // The stackalloc buffers below are fully written by Encode before anything reads them,
+    // so the implicit zeroing is pure waste at ~1,400 calls a render.
+    [SkipLocalsInit]
+    public unsafe bool SetDialogVariableStringForPlayer(IntPtr entity, uint slot, string panelId, string variableName, string value)
     {
         Resolve();
 
@@ -303,47 +422,75 @@ internal sealed class CustomHudNatives
         if (state == IntPtr.Zero)
             return false;
 
-        using var pPanel = new UtlString(panelId);
-        using var pName  = new UtlString(variableName);
-        using var pValue = new UtlString(value);
+        // This is the hot one - every tile of a grid goes through here.
+        byte* c0 = stackalloc byte[InlineBytes];
+        byte* c1 = stackalloc byte[InlineBytes];
+        byte* c2 = stackalloc byte[InlineBytes];
+        byte** utl = stackalloc byte*[3];
 
-        var index = Marshal.AllocHGlobal(sizeof(ushort));
+        // The intern functions write a ushort back through this.
+        ushort* index = stackalloc ushort[1];
+
+        IntPtr h0 = IntPtr.Zero, h1 = IntPtr.Zero, h2 = IntPtr.Zero;
 
         try
         {
-            if (!internPanel.Invoke(entity, pPanel.Ptr, index))
+            utl[0] = Encode(panelId, c0, ref h0);
+            utl[1] = Encode(variableName, c1, ref h1);
+            utl[2] = Encode(value, c2, ref h2);
+
+            if (!internPanel.Invoke(entity, (IntPtr) (utl + 0), (IntPtr) index))
                 return false;
 
-            var panelIndex = (uint) (ushort) Marshal.ReadInt16(index);
+            var panelIndex = (uint) *index;
 
-            if (!internVar.Invoke(entity, pName.Ptr, index))
+            if (!internVar.Invoke(entity, (IntPtr) (utl + 1), (IntPtr) index))
                 return false;
 
-            var variableIndex = (uint) (ushort) Marshal.ReadInt16(index);
+            var variableIndex = (uint) *index;
 
-            write.Invoke(state, panelIndex, variableIndex, pValue.Ptr);
+            write.Invoke(state, panelIndex, variableIndex, (IntPtr) (utl + 2));
 
             return true;
         }
         finally
         {
-            Marshal.FreeHGlobal(index);
+            Release(h0);
+            Release(h1);
+            Release(h2);
         }
     }
 
     /// <summary>Per-player class toggle. This one's engine entry point works, so it is called
     /// directly.</summary>
-    public bool SetHasClassForPlayer(IntPtr entity, uint slot, string panelId, string className, bool hasClass)
+    // The stackalloc buffers below are fully written by Encode before anything reads them,
+    // so the implicit zeroing is pure waste at ~1,400 calls a render.
+    [SkipLocalsInit]
+    public unsafe bool SetHasClassForPlayer(IntPtr entity, uint slot, string panelId, string className, bool hasClass)
     {
         Resolve();
 
         if (_setHasClassForPlayer is not { } fn)
             return false;
 
-        using var pPanel = new UtlString(panelId);
-        using var pClass = new UtlString(className);
+        byte* c0 = stackalloc byte[InlineBytes];
+        byte* c1 = stackalloc byte[InlineBytes];
+        byte** utl = stackalloc byte*[2];
 
-        fn.Invoke(entity, slot, pPanel.Ptr, pClass.Ptr, hasClass);
+        IntPtr h0 = IntPtr.Zero, h1 = IntPtr.Zero;
+
+        try
+        {
+            utl[0] = Encode(panelId, c0, ref h0);
+            utl[1] = Encode(className, c1, ref h1);
+
+            fn.Invoke(entity, slot, (IntPtr) (utl + 0), (IntPtr) (utl + 1), hasClass);
+        }
+        finally
+        {
+            Release(h0);
+            Release(h1);
+        }
 
         return true;
     }

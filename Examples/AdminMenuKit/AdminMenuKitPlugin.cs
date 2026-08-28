@@ -20,9 +20,9 @@ namespace PanoramaManager.ExampleKit;
 /// </summary>
 public sealed class AdminMenuKitPlugin : BasePlugin
 {
-    public override string ModuleName        => "HudMenu Example (Kit)";
+    public override string ModuleName        => "PanoramaManager Example (Kit)";
     public override string ModuleVersion     => "0.1.0";
-    public override string ModuleAuthor      => "HudMenu";
+    public override string ModuleAuthor      => "PanoramaManager";
     public override string ModuleDescription => "Admin menu on the kit-styled layout.";
 
     private const string Layout = "panorama/layout/custom_game/admin_hud_kit.vxml_c";
@@ -147,7 +147,7 @@ public sealed class AdminMenuKitPlugin : BasePlugin
                 break;
         }
 
-        Logger.LogInformation("[ExampleKit] {Admin} {Verb} {Target}", admin.PlayerName, verb, target.PlayerName);
+        Logger.LogDebug("[ExampleKit] {Admin} {Verb} {Target}", admin.PlayerName, verb, target.PlayerName);
 
         _menu?.Close(admin);
     }

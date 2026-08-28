@@ -16,9 +16,9 @@ namespace PanoramaManager.Example;
 /// </summary>
 public sealed class AdminMenuPlugin : BasePlugin
 {
-    public override string ModuleName        => "HudMenu Example";
+    public override string ModuleName        => "PanoramaManager Example";
     public override string ModuleVersion     => "0.1.0";
-    public override string ModuleAuthor      => "HudMenu";
+    public override string ModuleAuthor      => "PanoramaManager";
     public override string ModuleDescription => "Admin menu built on PanoramaManager.";
 
     private const string Layout = "panorama/layout/custom_game/admin_hud.vxml_c";
@@ -31,7 +31,7 @@ public sealed class AdminMenuPlugin : BasePlugin
         Panorama.Init(this);
 
         if (!Panorama.CanReceiveClicks)
-            Logger.LogWarning("[Example] HudMenu has no click channel - the menu will render but not respond.");
+            Logger.LogWarning("[Example] PanoramaManager has no click channel - the menu will render but not respond.");
 
         // One handle, reused. Content is rebuilt per open, so two admins browsing at once each keep
         // their own page while sharing the row set.

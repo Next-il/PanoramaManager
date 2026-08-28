@@ -22,5 +22,5 @@ python3 ../../../tools/validate.py .
 python3 ../../../tools/preview.py panorama/layout/custom_game/admin_hud.xml 5
 ```
 
-Do not edit `hud_shared.css` here - edit the library's copy in `HudMenu.Shared/workshop` and let the
+Do not edit `hud_shared.css` here - edit the library's copy in `PanoramaManager/workshop` and let the
 collector catch the drift.

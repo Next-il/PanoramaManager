@@ -43,11 +43,11 @@ internal static class SchemaProbe
                 var offset = Schema.GetSchemaOffset(ClassName, field);
 
                 if (offset > 0)
-                    logger.LogInformation("[HudMenu] schema {Class}::{Field} = +0x{Offset:X}", ClassName, field, offset);
+                    logger.LogInformation("[Panorama] schema {Class}::{Field} = +0x{Offset:X}", ClassName, field, offset);
             }
             catch (Exception e)
             {
-                logger.LogDebug("[HudMenu] schema {Class}::{Field} unavailable: {Message}", ClassName, field, e.Message);
+                logger.LogDebug("[Panorama] schema {Class}::{Field} unavailable: {Message}", ClassName, field, e.Message);
             }
         }
     }

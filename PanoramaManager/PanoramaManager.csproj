@@ -2,15 +2,39 @@
 
   <PropertyGroup>
     <AssemblyName>PanoramaManager</AssemblyName>
-    <RootNamespace>HudMenu</RootNamespace>
+    <RootNamespace>PanoramaManager</RootNamespace>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
   </PropertyGroup>
 
   <PropertyGroup>
     <PackageId>PanoramaManager</PackageId>
-    <Description>Helper library for building server-driven CS2 HUD menus on CounterStrikeSharp.</Description>
+    <Description>Server-driven Panorama HUDs for CounterStrikeSharp. Drive a custom_hud_layout from typed C# - write text, toggle classes per player, and get clicks back - without signature scanning or manual marshalling.</Description>
+    <Authors>Next-il</Authors>
+    <PackageTags>cs2;counter-strike;counterstrikesharp;panorama;hud;ui;menu</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/Next-il/PanoramaManager</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Next-il/PanoramaManager</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+
+    <!-- Ship the .pdb separately so a stack trace from a consumer has real line numbers. -->
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../README.md" Pack="true" PackagePath="/" />
+
+    <!--
+      The gamedata is packed for reference, not for installation - NuGet cannot write into a game
+      server. The library carries compiled-in copies of these values, so a consumer that never
+      copies the file still works; the file only matters after a CS2 update shifts a signature.
+
+      hud_shared.css is deliberately NOT packed. It is addon content that has to be compiled into a
+      VPK, so a copy sitting in a consumer's bin folder would only be misleading.
+    -->
+    <None Include="../gamedata/*.json" Pack="true" PackagePath="contentFiles/any/any/gamedata/" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="CounterStrikeSharp.API" Version="$(CounterStrikeSharpVersion)"

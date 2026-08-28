@@ -22,9 +22,9 @@ namespace PanoramaManager.Example.TextInput;
 /// </summary>
 public sealed class TextInputPlugin : BasePlugin
 {
-    public override string ModuleName        => "HudMenu Example (Text Input)";
+    public override string ModuleName        => "PanoramaManager Example (Text Input)";
     public override string ModuleVersion     => "0.1.0";
-    public override string ModuleAuthor      => "HudMenu";
+    public override string ModuleAuthor      => "PanoramaManager";
     public override string ModuleDescription => "Shows how PromptText gets typed text out of a player.";
 
     /// <summary>
@@ -142,7 +142,7 @@ public sealed class TextInputPlugin : BasePlugin
         {
             _messages[player.SteamID] = result.Text;
 
-            Logger.LogInformation("[TextInput] {Player} set: {Text}", player.PlayerName, result.Text);
+            Logger.LogDebug("[TextInput] {Player} set: {Text}", player.PlayerName, result.Text);
         }
 
         var footer = result.Outcome switch

@@ -7,7 +7,7 @@
 	</styles>
 
 	<!--
-		Implements HudMenu.LayoutContract.Default. Every id and {s:var} below is what the C# side
+		Implements PanoramaManager.LayoutContract.Default. Every id and {s:var} below is what the C# side
 		writes to, so renaming anything here means passing a customised LayoutContract from Spawn().
 
 		Deliberately restricted to Panel / Label / Image / Button with only id, class, hittest, text
@@ -17,42 +17,42 @@
 
 		NOTE: the outer panel deliberately has NO id. The compiler rejects an id on the root panel
 		("Found root panel with 'id' attribute, which is not permitted") because the loader assigns
-		it. So the root is an anonymous full-screen wrapper and HudMenuRoot sits one level in, which
+		it. So the root is an anonymous full-screen wrapper and PanoramaRoot sits one level in, which
 		is the same shape Valve's own custom_game examples use.
 	-->
-	<Panel class="hudmenu-viewport" hittest="false">
+	<Panel class="panorama-viewport" hittest="false">
 
 		<!-- "hidden" in the authored state on purpose. A custom_hud_layout entity shows its layout
 			     to EVERY player; the per-player state only overlays. Without this, the moment the entity
 			     spawns every player on the server sees an empty card, and closing whatever was on top of
 			     it reveals the thing sitting underneath. -->
-			<Panel id="HudMenuRoot" class="hudmenu-root hidden" hittest="true">
-			<Panel class="hudmenu-scrim" hittest="false" />
+			<Panel id="PanoramaRoot" class="panorama-root hidden" hittest="true">
+			<Panel class="panorama-scrim" hittest="false" />
 
-			<Panel class="hudmenu-card">
+			<Panel class="panorama-card">
 
-				<Panel class="hudmenu-header">
-					<Panel class="hudmenu-title-block">
-						<Label class="hudmenu-title" text="{s:menu_title}" />
-						<Label class="hudmenu-subtitle" text="{s:menu_subtitle}" />
+				<Panel class="panorama-header">
+					<Panel class="panorama-title-block">
+						<Label class="panorama-title" text="{s:menu_title}" />
+						<Label class="panorama-subtitle" text="{s:menu_subtitle}" />
 					</Panel>
 					<!-- CloseButton (from gamestyles.vcss_c) draws its own X. Adding a Label here
 					     puts a second one on top of it. -->
-					<Button id="menu_close" class="hudmenu-close CloseButton" />
+					<Button id="menu_close" class="panorama-close CloseButton" />
 				</Panel>
 
-				<Panel class="hudmenu-divider" hittest="false" />
+				<Panel class="panorama-divider" hittest="false" />
 
 				<!--
 					Tabs are optional. A tab is a Button id="tab_NAME" plus a Panel id="page_NAME";
 					the server toggles the "active" and "hidden" classes on both. Delete this block
 					for a menu with no tab bar and leave MenuHandle.Tabs empty.
 				-->
-				<Panel class="hudmenu-tabs" hittest="false">
-					<Button id="tab_players" class="hudmenu-tab active">
+				<Panel class="panorama-tabs" hittest="false">
+					<Button id="tab_players" class="panorama-tab active">
 						<Label text="Players" />
 					</Button>
-					<Button id="tab_server" class="hudmenu-tab">
+					<Button id="tab_server" class="panorama-tab">
 						<Label text="Server" />
 					</Button>
 				</Panel>
@@ -60,134 +60,134 @@
 				<!-- The row pool. Fixed size: this is the page size the C# side reads from
 				     LayoutContract.RowCount. Unused rows get class="hidden", which collapses them
 				     out of layout so the list closes up with no gaps. -->
-				<Panel class="hudmenu-rows" hittest="false">
-			<Panel id="row0" class="hudmenu-row hidden" hittest="false">
-				<Button id="row0_btn" class="hudmenu-row-hit">
-					<Panel class="hudmenu-row-index">
-						<Label class="hudmenu-row-index-text" text="1" />
+				<Panel class="panorama-rows" hittest="false">
+			<Panel id="row0" class="panorama-row hidden" hittest="false">
+				<Button id="row0_btn" class="panorama-row-hit">
+					<Panel class="panorama-row-index">
+						<Label class="panorama-row-index-text" text="1" />
 					</Panel>
-					<Panel class="hudmenu-row-copy">
-						<Label class="hudmenu-row-title" text="{s:row0_title}" />
-						<Label class="hudmenu-row-sub" text="{s:row0_sub}" />
-					</Panel>
-				</Button>
-			</Panel>
-			<Panel id="row1" class="hudmenu-row hidden" hittest="false">
-				<Button id="row1_btn" class="hudmenu-row-hit">
-					<Panel class="hudmenu-row-index">
-						<Label class="hudmenu-row-index-text" text="2" />
-					</Panel>
-					<Panel class="hudmenu-row-copy">
-						<Label class="hudmenu-row-title" text="{s:row1_title}" />
-						<Label class="hudmenu-row-sub" text="{s:row1_sub}" />
+					<Panel class="panorama-row-copy">
+						<Label class="panorama-row-title" text="{s:row0_title}" />
+						<Label class="panorama-row-sub" text="{s:row0_sub}" />
 					</Panel>
 				</Button>
 			</Panel>
-			<Panel id="row2" class="hudmenu-row hidden" hittest="false">
-				<Button id="row2_btn" class="hudmenu-row-hit">
-					<Panel class="hudmenu-row-index">
-						<Label class="hudmenu-row-index-text" text="3" />
+			<Panel id="row1" class="panorama-row hidden" hittest="false">
+				<Button id="row1_btn" class="panorama-row-hit">
+					<Panel class="panorama-row-index">
+						<Label class="panorama-row-index-text" text="2" />
 					</Panel>
-					<Panel class="hudmenu-row-copy">
-						<Label class="hudmenu-row-title" text="{s:row2_title}" />
-						<Label class="hudmenu-row-sub" text="{s:row2_sub}" />
-					</Panel>
-				</Button>
-			</Panel>
-			<Panel id="row3" class="hudmenu-row hidden" hittest="false">
-				<Button id="row3_btn" class="hudmenu-row-hit">
-					<Panel class="hudmenu-row-index">
-						<Label class="hudmenu-row-index-text" text="4" />
-					</Panel>
-					<Panel class="hudmenu-row-copy">
-						<Label class="hudmenu-row-title" text="{s:row3_title}" />
-						<Label class="hudmenu-row-sub" text="{s:row3_sub}" />
+					<Panel class="panorama-row-copy">
+						<Label class="panorama-row-title" text="{s:row1_title}" />
+						<Label class="panorama-row-sub" text="{s:row1_sub}" />
 					</Panel>
 				</Button>
 			</Panel>
-			<Panel id="row4" class="hudmenu-row hidden" hittest="false">
-				<Button id="row4_btn" class="hudmenu-row-hit">
-					<Panel class="hudmenu-row-index">
-						<Label class="hudmenu-row-index-text" text="5" />
+			<Panel id="row2" class="panorama-row hidden" hittest="false">
+				<Button id="row2_btn" class="panorama-row-hit">
+					<Panel class="panorama-row-index">
+						<Label class="panorama-row-index-text" text="3" />
 					</Panel>
-					<Panel class="hudmenu-row-copy">
-						<Label class="hudmenu-row-title" text="{s:row4_title}" />
-						<Label class="hudmenu-row-sub" text="{s:row4_sub}" />
-					</Panel>
-				</Button>
-			</Panel>
-			<Panel id="row5" class="hudmenu-row hidden" hittest="false">
-				<Button id="row5_btn" class="hudmenu-row-hit">
-					<Panel class="hudmenu-row-index">
-						<Label class="hudmenu-row-index-text" text="6" />
-					</Panel>
-					<Panel class="hudmenu-row-copy">
-						<Label class="hudmenu-row-title" text="{s:row5_title}" />
-						<Label class="hudmenu-row-sub" text="{s:row5_sub}" />
+					<Panel class="panorama-row-copy">
+						<Label class="panorama-row-title" text="{s:row2_title}" />
+						<Label class="panorama-row-sub" text="{s:row2_sub}" />
 					</Panel>
 				</Button>
 			</Panel>
-			<Panel id="row6" class="hudmenu-row hidden" hittest="false">
-				<Button id="row6_btn" class="hudmenu-row-hit">
-					<Panel class="hudmenu-row-index">
-						<Label class="hudmenu-row-index-text" text="7" />
+			<Panel id="row3" class="panorama-row hidden" hittest="false">
+				<Button id="row3_btn" class="panorama-row-hit">
+					<Panel class="panorama-row-index">
+						<Label class="panorama-row-index-text" text="4" />
 					</Panel>
-					<Panel class="hudmenu-row-copy">
-						<Label class="hudmenu-row-title" text="{s:row6_title}" />
-						<Label class="hudmenu-row-sub" text="{s:row6_sub}" />
-					</Panel>
-				</Button>
-			</Panel>
-			<Panel id="row7" class="hudmenu-row hidden" hittest="false">
-				<Button id="row7_btn" class="hudmenu-row-hit">
-					<Panel class="hudmenu-row-index">
-						<Label class="hudmenu-row-index-text" text="8" />
-					</Panel>
-					<Panel class="hudmenu-row-copy">
-						<Label class="hudmenu-row-title" text="{s:row7_title}" />
-						<Label class="hudmenu-row-sub" text="{s:row7_sub}" />
+					<Panel class="panorama-row-copy">
+						<Label class="panorama-row-title" text="{s:row3_title}" />
+						<Label class="panorama-row-sub" text="{s:row3_sub}" />
 					</Panel>
 				</Button>
 			</Panel>
-			<Panel id="row8" class="hudmenu-row hidden" hittest="false">
-				<Button id="row8_btn" class="hudmenu-row-hit">
-					<Panel class="hudmenu-row-index">
-						<Label class="hudmenu-row-index-text" text="9" />
+			<Panel id="row4" class="panorama-row hidden" hittest="false">
+				<Button id="row4_btn" class="panorama-row-hit">
+					<Panel class="panorama-row-index">
+						<Label class="panorama-row-index-text" text="5" />
 					</Panel>
-					<Panel class="hudmenu-row-copy">
-						<Label class="hudmenu-row-title" text="{s:row8_title}" />
-						<Label class="hudmenu-row-sub" text="{s:row8_sub}" />
+					<Panel class="panorama-row-copy">
+						<Label class="panorama-row-title" text="{s:row4_title}" />
+						<Label class="panorama-row-sub" text="{s:row4_sub}" />
 					</Panel>
 				</Button>
 			</Panel>
-			<Panel id="row9" class="hudmenu-row hidden" hittest="false">
-				<Button id="row9_btn" class="hudmenu-row-hit">
-					<Panel class="hudmenu-row-index">
-						<Label class="hudmenu-row-index-text" text="10" />
+			<Panel id="row5" class="panorama-row hidden" hittest="false">
+				<Button id="row5_btn" class="panorama-row-hit">
+					<Panel class="panorama-row-index">
+						<Label class="panorama-row-index-text" text="6" />
 					</Panel>
-					<Panel class="hudmenu-row-copy">
-						<Label class="hudmenu-row-title" text="{s:row9_title}" />
-						<Label class="hudmenu-row-sub" text="{s:row9_sub}" />
+					<Panel class="panorama-row-copy">
+						<Label class="panorama-row-title" text="{s:row5_title}" />
+						<Label class="panorama-row-sub" text="{s:row5_sub}" />
+					</Panel>
+				</Button>
+			</Panel>
+			<Panel id="row6" class="panorama-row hidden" hittest="false">
+				<Button id="row6_btn" class="panorama-row-hit">
+					<Panel class="panorama-row-index">
+						<Label class="panorama-row-index-text" text="7" />
+					</Panel>
+					<Panel class="panorama-row-copy">
+						<Label class="panorama-row-title" text="{s:row6_title}" />
+						<Label class="panorama-row-sub" text="{s:row6_sub}" />
+					</Panel>
+				</Button>
+			</Panel>
+			<Panel id="row7" class="panorama-row hidden" hittest="false">
+				<Button id="row7_btn" class="panorama-row-hit">
+					<Panel class="panorama-row-index">
+						<Label class="panorama-row-index-text" text="8" />
+					</Panel>
+					<Panel class="panorama-row-copy">
+						<Label class="panorama-row-title" text="{s:row7_title}" />
+						<Label class="panorama-row-sub" text="{s:row7_sub}" />
+					</Panel>
+				</Button>
+			</Panel>
+			<Panel id="row8" class="panorama-row hidden" hittest="false">
+				<Button id="row8_btn" class="panorama-row-hit">
+					<Panel class="panorama-row-index">
+						<Label class="panorama-row-index-text" text="9" />
+					</Panel>
+					<Panel class="panorama-row-copy">
+						<Label class="panorama-row-title" text="{s:row8_title}" />
+						<Label class="panorama-row-sub" text="{s:row8_sub}" />
+					</Panel>
+				</Button>
+			</Panel>
+			<Panel id="row9" class="panorama-row hidden" hittest="false">
+				<Button id="row9_btn" class="panorama-row-hit">
+					<Panel class="panorama-row-index">
+						<Label class="panorama-row-index-text" text="10" />
+					</Panel>
+					<Panel class="panorama-row-copy">
+						<Label class="panorama-row-title" text="{s:row9_title}" />
+						<Label class="panorama-row-sub" text="{s:row9_sub}" />
 					</Panel>
 				</Button>
 			</Panel>
 				</Panel>
 
-				<!-- Nav bar. HudMenuRoot gets class "has-pages" only when there is more than one
+				<!-- Nav bar. PanoramaRoot gets class "has-pages" only when there is more than one
 				     page, so a short list hides this entirely. -->
-				<Panel class="hudmenu-nav" hittest="false">
-					<Button id="nav_prev" class="hudmenu-nav-btn">
+				<Panel class="panorama-nav" hittest="false">
+					<Button id="nav_prev" class="panorama-nav-btn">
 						<Label text="&#x2039; Prev" />
 					</Button>
-					<Label class="hudmenu-page" text="{s:menu_page}" />
-					<Button id="nav_next" class="hudmenu-nav-btn">
+					<Label class="panorama-page" text="{s:menu_page}" />
+					<Button id="nav_next" class="panorama-nav-btn">
 						<Label text="Next &#x203a;" />
 					</Button>
 				</Panel>
 
-				<Panel class="hudmenu-footer" hittest="false">
-					<Label class="hudmenu-footer-text" text="{s:menu_footer}" />
-					<Label class="hudmenu-uptime" text="{s:uptime}" />
+				<Panel class="panorama-footer" hittest="false">
+					<Label class="panorama-footer-text" text="{s:menu_footer}" />
+					<Label class="panorama-uptime" text="{s:uptime}" />
 				</Panel>
 
 			</Panel>

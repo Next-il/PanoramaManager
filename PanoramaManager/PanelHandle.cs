@@ -361,7 +361,7 @@ public sealed class PanelHandle : IDisposable
         if (raw.Token is not null && raw.Token != session.Token)
         {
             _logger.LogWarning(
-                "[HudMenu] rejected interaction with a stale or forged token from {Player} (menu {MenuId})",
+                "[Panorama] rejected interaction with a stale or forged token from {Player} (menu {MenuId})",
                 player.PlayerName, Id);
 
             return true;
@@ -464,7 +464,7 @@ public sealed class PanelHandle : IDisposable
         catch (Exception e)
         {
             // A consumer's handler throwing must not take down the click hook.
-            _logger.LogError(e, "[HudMenu] consumer handler threw for menu {MenuId} element {Element}", Id, elementId);
+            _logger.LogError(e, "[Panorama] consumer handler threw for menu {MenuId} element {Element}", Id, elementId);
         }
     }
 
@@ -527,7 +527,7 @@ public sealed class PanelHandle : IDisposable
             Raise(player, PanelAction.Restored, _contract.RootPanelId, null, page, Array.Empty<string>());
         }
 
-        _logger.LogInformation("[HudMenu] restored {Count} viewer(s) of menu {MenuId} after world reset",
+        _logger.LogDebug("[Panorama] restored {Count} viewer(s) of menu {MenuId} after world reset",
             _sessions.Count, Id);
     }
 
@@ -551,7 +551,7 @@ public sealed class PanelHandle : IDisposable
         if (!Panorama.SetHideHud(player, _contract.HideHud, hide))
         {
             _logger.LogWarning(
-                "[HudMenu] {Action} of HUD flags {Flags} for {Player} did nothing - no valid pawn. "
+                "[Panorama] {Action} of HUD flags {Flags} for {Player} did nothing - no valid pawn. "
                 + "Dead or spectating players have no pawn to carry them, and respawning drops them.",
                 hide ? "hiding" : "restoring", _contract.HideHud, player.PlayerName);
         }

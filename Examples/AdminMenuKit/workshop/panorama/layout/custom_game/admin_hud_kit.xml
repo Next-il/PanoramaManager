@@ -5,7 +5,7 @@
 	</styles>
 
 	<!--
-		Kit-styled skin for HudMenu. Same ids and {s:vars} as admin_hud.xml - both implement
+		Kit-styled skin for PanoramaManager. Same ids and {s:vars} as admin_hud.xml - both implement
 		LayoutContract.Default, so the same C# drives either and switching is a layout path.
 
 		Two things this one adds:
@@ -21,7 +21,7 @@
 		width: 100% (so it sized to its parent). That circle resolves to zero. See Workshop/README.md.
 	-->
 	<Panel class="kitmenu-screen" hittest="false">
-		<Panel id="HudMenuRoot" class="kitmenu-root kitmenu-panel">
+		<Panel id="PanoramaRoot" class="kitmenu-root kitmenu-panel">
 
 			<Panel class="kitmenu-head">
 				<Label class="kitmenu-title" text="{s:menu_title}" />

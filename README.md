@@ -93,18 +93,37 @@ cannot take a keystroke.
 
 ## Installation
 
-1. Download the latest [release](../../releases).
-2. Copy `gamedata/panoramamanager.json` to `addons/counterstrikesharp/gamedata/`.
-3. Copy the example plugins you want from `plugins/` to `addons/counterstrikesharp/plugins/`.
-4. Add `workshop/panorama/` from the release to a workshop addon, build it, and mount it. The paths must stay as
-  `panorama/layout/custom_game` and `panorama/styles/custom_game` - that is the search path CS2
+### In your plugin
+
+```
+dotnet add package PanoramaManager
+```
+
+The package brings `gamedata/panoramamanager.json` with it, and the DLL copies next to your plugin
+on build - which is what CounterStrikeSharp needs, since each plugin loads through a context that
+probes its own directory.
+
+Then, on the server:
+
+1. Copy `gamedata/panoramamanager.json` to `addons/counterstrikesharp/gamedata/`. It ships in the
+   package under `contentFiles/any/any/gamedata/`, and in every [release](../../releases).
+2. Add `workshop/panorama/` to a workshop addon, build it, and mount it. The paths must stay as
+   `panorama/layout/custom_game` and `panorama/styles/custom_game` - that is the search path CS2
    registers for custom HUD layouts.
 
-Check it came up:
+### Just the examples
+
+Download the latest [release](../../releases), do steps 1 and 2 above, and copy the plugins you want
+from `plugins/` to `addons/counterstrikesharp/plugins/`.
+
+Either way, check it came up:
 
 ```
 css_panorama_diag
 ```
+
+A healthy start logs nothing. An error means the gamedata file is missing or a signature stopped
+resolving after a CS2 update, and it says what to do about it.
 
 
 
@@ -122,19 +141,6 @@ css_panorama_diag
 
 
 ## API
-
-Reference `PanoramaManager.dll` from the release:
-
-```xml
-<ItemGroup>
-  <Reference Include="PanoramaManager">
-    <HintPath>lib\PanoramaManager.dll</HintPath>
-  </Reference>
-</ItemGroup>
-```
-
-It copies next to your plugin on build, which is what CounterStrikeSharp needs - each plugin loads
-through a context that probes its own directory.
 
 ### Interface
 
@@ -176,7 +182,7 @@ record MenuItem(string Id, string Title, string? Subtitle = null,
 // What the layout is called
 class LayoutContract
 {
-    string  RootPanelId;      // default "HudMenuRoot"
+    string  RootPanelId;      // default "PanoramaRoot"
     int     RowCount;         // physical rows in the layout - this is the page size
     string? RevealClass;      // set for an animated layout instead of collapse-to-hide
     bool    CaptureInput;     // false for anything the player only reads

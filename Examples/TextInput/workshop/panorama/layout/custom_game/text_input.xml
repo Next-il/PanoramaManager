@@ -24,7 +24,7 @@
 		  menu_footer                  {s:}   - status line
 	-->
 	<Panel class="hud-screen" hittest="false">
-		<Panel id="HudMenuRoot" class="hud-root hud-card ti-root">
+		<Panel id="PanoramaRoot" class="hud-root hud-card ti-root">
 
 			<Panel class="hud-head">
 				<Label class="hud-title" text="{s:menu_title}" />

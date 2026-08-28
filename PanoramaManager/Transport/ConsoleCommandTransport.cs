@@ -41,10 +41,10 @@ public sealed class ConsoleCommandTransport : IPanelTransport
         if (_installed)
             return;
 
-        _plugin.AddCommand(_command, "HudMenu interaction channel (internal).", Handle);
+        _plugin.AddCommand(_command, "Panorama interaction channel (internal).", Handle);
         _installed = true;
 
-        _logger.LogInformation("[HudMenu] command transport installed as '{Command}'", _command);
+        _logger.LogDebug("[Panorama] command transport installed as '{Command}'", _command);
     }
 
     public void Uninstall()

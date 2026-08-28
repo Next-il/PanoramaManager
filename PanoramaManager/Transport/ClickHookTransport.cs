@@ -52,7 +52,7 @@ public sealed class ClickHookTransport : IPanelTransport
 
         if (PanoramaGameData.Signature(SignatureKey) is not { } signature)
         {
-            _logger.LogWarning("[HudMenu] no click-receiver signature for this platform - clicks won't be reported.");
+            _logger.LogDebug("[Panorama] no click-receiver signature for this platform - clicks won't be reported.");
 
             return;
         }
@@ -62,7 +62,7 @@ public sealed class ClickHookTransport : IPanelTransport
         if (function.Handle == IntPtr.Zero)
         {
             _logger.LogWarning(
-                "[HudMenu] click receiver did not resolve - menus will render but clicks won't be "
+                "[Panorama] click receiver did not resolve - menus will render but clicks won't be "
                 + "reported. Re-derive the signature after a CS2 update; see gamedata/panoramamanager.json.");
 
             return;
@@ -71,7 +71,7 @@ public sealed class ClickHookTransport : IPanelTransport
         function.Hook(OnClicked, HookMode.Pre);
         _function = function;
 
-        _logger.LogInformation("[HudMenu] click transport installed @ 0x{Target:X}", function.Handle);
+        _logger.LogDebug("[Panorama] click transport installed @ 0x{Target:X}", function.Handle);
     }
 
     public void Uninstall()
@@ -105,7 +105,7 @@ public sealed class ClickHookTransport : IPanelTransport
         }
         catch (Exception e)
         {
-            _logger.LogError(e, "[HudMenu] click transport handler threw");
+            _logger.LogError(e, "[Panorama] click transport handler threw");
         }
 
         return HookResult.Continue;

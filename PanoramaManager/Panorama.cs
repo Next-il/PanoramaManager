@@ -100,21 +100,10 @@ public static class Panorama
         _plugin = plugin;
         _logger = plugin.Logger;
 
-        // Force signature resolution now rather than on the first menu open. Resolving is lazy by
-        // default, which would mean a bad gamedata file stays invisible until someone runs a command
-        // - exactly when you least want to be reading logs. This puts the gamedata source and the
-        // full native table in the console at plugin load.
+        // Force signature resolution now rather than on the first menu open, so a broken gamedata
+        // file is reported at load instead of the first time somebody opens a menu. This is silent
+        // unless something is actually wrong; `css_panorama_diag` prints the full table on demand.
         CanWritePerPlayerText = new CustomHudNatives(_logger).CanWritePerPlayerText;
-
-        // Report what the schema system knows about this entity. Schema offsets resolve by name at
-        // runtime, so anything found here is a byte offset we can stop hardcoding - and hardcoded
-        // offsets are what a CS2 update breaks.
-        SchemaProbe.Report(_logger);
-
-        if (!CanWritePerPlayerText)
-            _logger.LogWarning(
-                "[HudMenu] per-player text unavailable - every viewer of a menu will share one set "
-                + "of strings. Check the native table above for a function at 0x0.");
 
         _transport = transport ?? new ClickHookTransport(_logger);
         _transport.OnInteraction += Dispatch;
@@ -134,13 +123,13 @@ public static class Panorama
         // One command that answers "is this working", because the alternative is reading five
         // startup lines that have scrolled away. Distilled from the Poc1 probe plugin, which existed
         // only to poke the entity by hand - this is the part of it worth keeping.
-        plugin.AddCommand("css_panorama_diag", "Report HudMenu native and transport status.", Diagnose);
+        plugin.AddCommand("css_panorama_diag", "Report Panorama native and transport status.", Diagnose);
 
         if (!_transport.IsInstalled)
         {
             _logger.LogWarning(
-                "[HudMenu] initialised without a working click channel - menus will render but "
-                + "won't respond. This is expected on Windows servers.");
+                "[Panorama] no click channel - menus will render but won't respond. Expected on "
+                + "Windows servers; on Linux, run css_panorama_diag.");
         }
     }
 
@@ -222,7 +211,7 @@ public static class Panorama
         }
         catch (Exception e)
         {
-            _logger?.LogError(e, "[HudMenu] text prompt handler threw");
+            _logger?.LogError(e, "[Panorama] text prompt handler threw");
         }
     }
 
@@ -244,18 +233,20 @@ public static class Panorama
         // genuinely differs - but only if each block says whose it is.
         var owner = _plugin?.ModuleName ?? "?";
 
-        command.ReplyToCommand($"[HudMenu/{owner}] gamedata: {PanoramaGameData.Source}");
-        command.ReplyToCommand($"[HudMenu/{owner}] per-player text: {(natives.CanWritePerPlayerText ? "available" : "UNAVAILABLE - text will be shared")}");
-        command.ReplyToCommand($"[HudMenu/{owner}] click channel:   {(CanReceiveClicks ? "installed" : "NOT INSTALLED - clicks will not arrive")}");
-        command.ReplyToCommand($"[HudMenu/{owner}] live menus:      {Handles.Count}");
+        foreach (var line in natives.Describe())
+            command.ReplyToCommand($"[Panorama/{owner}] {line}");
+
+        command.ReplyToCommand($"[Panorama/{owner}] per-player text: {(natives.CanWritePerPlayerText ? "available" : "UNAVAILABLE - text will be shared")}");
+        command.ReplyToCommand($"[Panorama/{owner}] click channel:   {(CanReceiveClicks ? "installed" : "NOT INSTALLED - clicks will not arrive")}");
+        command.ReplyToCommand($"[Panorama/{owner}] live menus:      {Handles.Count}");
 
         foreach (var handle in Handles)
         {
-            command.ReplyToCommand($"[HudMenu/{owner}]   {handle.Id} {handle.LayoutPath} ({handle.OpenCount} viewer(s))");
+            command.ReplyToCommand($"[Panorama/{owner}]   {handle.Id} {handle.LayoutPath} ({handle.OpenCount} viewer(s))");
         }
 
         SchemaProbe.Report(_logger!);
-        command.ReplyToCommand($"[HudMenu/{owner}] schema offsets written to the server log.");
+        command.ReplyToCommand($"[Panorama/{owner}] schema offsets written to the server log.");
     }
 
     /// <summary>Tears everything down. Call from your plugin's <c>Unload</c>.</summary>
@@ -346,7 +337,7 @@ public static class Panorama
         }
         catch (Exception e)
         {
-            _logger?.LogWarning(e, "[HudMenu] could not set HUD flags for {Player}", player.PlayerName);
+            _logger?.LogWarning(e, "[Panorama] could not set HUD flags for {Player}", player.PlayerName);
 
             return false;
         }

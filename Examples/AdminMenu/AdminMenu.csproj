@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <AssemblyName>AdminMenu</AssemblyName>
-    <RootNamespace>HudMenu.Example</RootNamespace>
+    <RootNamespace>PanoramaManager.Examples</RootNamespace>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
     <OutputPath>$(MSBuildThisFileDirectory)..\..\.build\plugins\AdminMenu\</OutputPath>
     <!-- Don't drag the referenced project's .xml doc file into the plugin folder. Keep .pdb so

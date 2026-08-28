@@ -1,5 +1,5 @@
 /*
-    HudMenu - styling for admin_hud.xml.
+    PanoramaManager - styling for admin_hud.xml.
 
     Panorama CSS, not web CSS. Notable differences:
       * visibility: collapse removes a panel from layout (display:none has no equivalent).
@@ -20,14 +20,14 @@
 
 /*
     The root panel cannot carry an id (the compiler rejects it), so this anonymous wrapper is the
-    root and HudMenuRoot sits inside it. Purely structural.
+    root and PanoramaRoot sits inside it. Purely structural.
 */
-.hudmenu-viewport {
+.panorama-viewport {
     width: 100%;
     height: 100%;
 }
 
-.hudmenu-root {
+.panorama-root {
     width: 100%;
     height: 100%;
     flow-children: down;
@@ -35,20 +35,20 @@
     vertical-align: center;
 }
 
-.hudmenu-scrim {
+.panorama-scrim {
     width: 100%;
     height: 100%;
     background-color: #00000099;
     z-index: -1;
     /*
-        .hudmenu-root is flow-children: down, so without this the scrim consumes the full root
+        .panorama-root is flow-children: down, so without this the scrim consumes the full root
         height as a flowing sibling and the card flows off the bottom of the screen. An overlay
         has to leave the flow.
     */
     ignore-parent-flow: true;
 }
 
-.hudmenu-card {
+.panorama-card {
     width: 620px;
     flow-children: down;
     padding: 20px;
@@ -61,36 +61,36 @@
 
 /* Header ------------------------------------------------------------------ */
 
-.hudmenu-header {
+.panorama-header {
     width: 100%;
     flow-children: right;
 }
 
-.hudmenu-title-block {
+.panorama-title-block {
     flow-children: down;
     width: fill-parent-flow(1.0);
 }
 
-.hudmenu-title {
+.panorama-title {
     font-size: 24px;
     font-weight: bold;
     color: #ffffff;
 }
 
-.hudmenu-subtitle {
+.panorama-subtitle {
     font-size: 13px;
     color: #f0a92a;
     text-transform: uppercase;
     letter-spacing: 2px;
 }
 
-.hudmenu-close {
+.panorama-close {
     width: 28px;
     height: 28px;
     vertical-align: center;
 }
 
-.hudmenu-divider {
+.panorama-divider {
     width: 100%;
     height: 1px;
     margin-top: 12px;
@@ -100,13 +100,13 @@
 
 /* Tabs -------------------------------------------------------------------- */
 
-.hudmenu-tabs {
+.panorama-tabs {
     width: 100%;
     flow-children: right;
     margin-bottom: 12px;
 }
 
-.hudmenu-tab {
+.panorama-tab {
     padding: 6px 16px;
     margin-right: 6px;
     border-radius: 4px;
@@ -118,25 +118,25 @@
     transition-timing-function: ease-in-out;
 }
 
-.hudmenu-tab:hover {
+.panorama-tab:hover {
     background-color: #ffffff1f;
     color: #ffffff;
 }
 
 /* Server toggles this via SetClass(slot, "tab_<id>", "active", true). */
-.hudmenu-tab.active {
+.panorama-tab.active {
     background-color: #4a90d9;
     color: #ffffff;
 }
 
 /* Rows -------------------------------------------------------------------- */
 
-.hudmenu-rows {
+.panorama-rows {
     width: 100%;
     flow-children: down;
 }
 
-.hudmenu-row {
+.panorama-row {
     width: 100%;
     margin-bottom: 4px;
 }
@@ -147,7 +147,7 @@
     like a 3-row list. Using opacity or transparency here would leave seven empty gaps.
 */
 
-.hudmenu-row-hit {
+.panorama-row-hit {
     width: 100%;
     flow-children: right;
     padding: 10px;
@@ -158,15 +158,15 @@
     transition-timing-function: ease-in-out;
 }
 
-.hudmenu-row-hit:hover {
+.panorama-row-hit:hover {
     background-color: #ffffff1a;
 }
 
-.hudmenu-row.disabled {
+.panorama-row.disabled {
     opacity: 0.4;
 }
 
-.hudmenu-row-index {
+.panorama-row-index {
     width: 28px;
     height: 28px;
     border-radius: 3px;
@@ -175,7 +175,7 @@
     margin-right: 12px;
 }
 
-.hudmenu-row-index-text {
+.panorama-row-index-text {
     font-size: 14px;
     font-weight: bold;
     color: #f0a92a;
@@ -183,18 +183,18 @@
     vertical-align: center;
 }
 
-.hudmenu-row-copy {
+.panorama-row-copy {
     flow-children: down;
     width: fill-parent-flow(1.0);
     vertical-align: center;
 }
 
-.hudmenu-row-title {
+.panorama-row-title {
     font-size: 16px;
     color: #ffffff;
 }
 
-.hudmenu-row-sub {
+.panorama-row-sub {
     font-size: 12px;
     color: #8b92a0;
 }
@@ -205,7 +205,7 @@
     Hidden until the server sets "has-pages" on the root, which it does only when
     PageCount > 1. A single-page menu shows no pager at all.
 */
-.hudmenu-nav {
+.panorama-nav {
     width: 100%;
     flow-children: right;
     margin-top: 12px;
@@ -213,11 +213,11 @@
     visibility: collapse;
 }
 
-.hudmenu-root.has-pages .hudmenu-nav {
+.panorama-root.has-pages .panorama-nav {
     visibility: visible;
 }
 
-.hudmenu-nav-btn {
+.panorama-nav-btn {
     padding: 6px 14px;
     border-radius: 4px;
     background-color: #ffffff0d;
@@ -225,12 +225,12 @@
     font-size: 13px;
 }
 
-.hudmenu-nav-btn:hover {
+.panorama-nav-btn:hover {
     background-color: #ffffff1f;
     color: #ffffff;
 }
 
-.hudmenu-page {
+.panorama-page {
     font-size: 13px;
     color: #8b92a0;
     margin: 0px 14px;
@@ -239,19 +239,19 @@
 
 /* Footer ------------------------------------------------------------------ */
 
-.hudmenu-footer {
+.panorama-footer {
     width: 100%;
     flow-children: right;
     margin-top: 14px;
 }
 
-.hudmenu-footer-text {
+.panorama-footer-text {
     font-size: 11px;
     color: #5c6270;
     width: fill-parent-flow(1.0);
 }
 
-.hudmenu-uptime {
+.panorama-uptime {
     font-size: 11px;
     color: #5c6270;
 }

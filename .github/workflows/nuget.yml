@@ -1,0 +1,91 @@
+name: nuget
+
+# Publishing is deliberately tag-driven rather than on every push to main: a NuGet version is
+# immutable once pushed, so it has to be an explicit act. build.yml still cuts a server zip on
+# every main push - that is a different thing with different rules.
+#
+#   git tag nuget-v0.1.0 && git push origin nuget-v0.1.0
+#
+on:
+  push:
+    tags: [ 'nuget-v*' ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish, e.g. 0.1.0'
+        required: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    permissions:
+      # Lets GitHub mint the OIDC token that nuget.org exchanges for a one-hour API key.
+      # Without this the login step fails with no token available.
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Work out the version
+        id: version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#nuget-v}"
+          fi
+
+          # Catch a typo before it becomes a permanent nuget.org version.
+          if ! echo "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$version' is not a semver version"
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publishing $version"
+
+      - name: Pack
+        run: |
+          dotnet pack PanoramaManager/PanoramaManager.csproj -c Release --nologo \
+            -p:Version=${{ steps.version.outputs.version }} \
+            -o artifacts
+
+      # The package is useless without the gamedata file, and that is easy to break by editing
+      # the csproj. Cheaper to catch here than in someone's server log.
+      - name: Verify the package
+        run: |
+          set -e
+          nupkg="artifacts/PanoramaManager.${{ steps.version.outputs.version }}.nupkg"
+          test -f "$nupkg"
+          test -f "artifacts/PanoramaManager.${{ steps.version.outputs.version }}.snupkg"
+          unzip -l "$nupkg" | grep -q 'lib/net10.0/PanoramaManager.dll'
+          unzip -l "$nupkg" | grep -q 'contentFiles/any/any/gamedata/panoramamanager.json'
+          unzip -l "$nupkg" | grep -q 'README.md'
+          unzip -l "$nupkg"
+
+      # Keyless. The token is minted here and dies in an hour, so it is requested immediately
+      # before the push rather than at the top of the job.
+      - name: NuGet login
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
+      # No --skip-duplicate: re-pushing a version that already exists should fail loudly.
+      # The .snupkg goes along with the .nupkg automatically.
+      - name: Push
+        run: |
+          dotnet nuget push "artifacts/PanoramaManager.${{ steps.version.outputs.version }}.nupkg" \
+            --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
+            --source https://api.nuget.org/v3/index.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nupkg
+          path: artifacts/

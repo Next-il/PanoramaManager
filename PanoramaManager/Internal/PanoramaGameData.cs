@@ -29,9 +29,15 @@ internal static class PanoramaGameData
     private static Dictionary<string, string>? _signatures;
     private static Dictionary<string, int>?    _offsets;
     private static string?                     _source;
+    private static bool                        _fileFound;
 
-    /// <summary>Where the values came from, for the startup log.</summary>
+    /// <summary>Where the values came from. Reported by <c>css_panorama_diag</c>.</summary>
     internal static string Source => _source ?? "(not loaded)";
+
+    /// <summary>False when no <c>panoramamanager.json</c> was found and the compiled-in defaults
+    /// are in use. Those defaults are a snapshot of one CS2 build - they work until the next
+    /// update moves the functions, and then nothing renders with no obvious reason why.</summary>
+    internal static bool FileFound { get { Load(); return _fileFound; } }
 
     internal static string? Signature(string key)
     {
@@ -58,6 +64,8 @@ internal static class PanoramaGameData
 
         if (FindFile() is not { } path)
             return;
+
+        _fileFound = true;
 
         try
         {
