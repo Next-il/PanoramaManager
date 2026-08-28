@@ -69,6 +69,15 @@ jobs:
           unzip -l "$nupkg" | grep -q 'README.md'
           unzip -l "$nupkg"
 
+      # NuGet/login fails with a bare "Input required and not supplied: user" when the secret is
+      # missing, which says nothing about which secret or where to set it.
+      - name: Check the secret is set
+        run: |
+          if [ -z "${{ secrets.NUGET_USER }}" ]; then
+            echo "::error::NUGET_USER is not set. Add it under Settings > Secrets and variables > Actions. It is your nuget.org profile name (the last part of nuget.org/profiles/<name>), not your email."
+            exit 1
+          fi
+
       # Keyless. The token is minted here and dies in an hour, so it is requested immediately
       # before the push rather than at the top of the job.
       - name: NuGet login
