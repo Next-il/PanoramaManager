@@ -16,7 +16,7 @@
          plugins/<Name>/<Name>.dll layout CounterStrikeSharp requires. -->
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
-    <Version>0.1.0</Version>
+    <Version>0.1.2</Version>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <!-- Undocumented public members: the API surface is documented, internals are not. -->
     <NoWarn>$(NoWarn);CS1591</NoWarn>

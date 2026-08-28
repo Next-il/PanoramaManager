@@ -47,13 +47,17 @@ def main():
     ap = argparse.ArgumentParser(description="Assemble panorama files from every project.")
     ap.add_argument("--out", required=True, help="addon content directory; panorama/ is written into it")
     ap.add_argument("--root", default=".", help="repo root to search from")
+    ap.add_argument("--exclude", action="append", default=[],
+                    help="skip any source path containing this substring; repeatable. For a project "
+                         "that owns a same-named layout and needs its own addon.")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
     root = pathlib.Path(args.root).resolve()
     out = pathlib.Path(args.out).resolve() / "panorama"
 
-    found = sources(root)
+    found = [f for f in sources(root)
+             if not any(x.lower() in str(f).lower() for x in args.exclude)]
 
     if not found:
         print(f"no panorama trees under {root}")

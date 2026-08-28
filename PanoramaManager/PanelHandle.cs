@@ -289,8 +289,12 @@ public sealed class PanelHandle : IDisposable
         else
             _renderer.SetClass(slot, _contract.RootPanelId, _contract.HiddenClass, true);
         _renderer.RenderRows(slot, Array.Empty<MenuItem>());
-        if (_contract.CaptureInput)
-            _renderer.SetInputCapture(slot, false);
+
+        // Released unconditionally, unlike Open which is guarded. Turning capture off for a layout
+        // that never turned it on is a no-op - the netvar is already false, so nothing is even sent
+        // - whereas skipping the release when it somehow IS on strands the player in cursor mode
+        // with no way out. Dispose and Shutdown both come through here, so this covers them too.
+        _renderer.SetInputCapture(slot, false);
 
         // Raise on EVERY close, not just a click on the X. A consumer that changed something on open
         // - hid the crosshair, paused a timer - has to be able to undo it, and the closes it cannot
@@ -518,7 +522,13 @@ public sealed class PanelHandle : IDisposable
 
             _sessions[slot] = session;
 
-            _renderer.SetInputCapture(slot, true);
+            // Guarded exactly as Open is. Capturing input for a layout that opted out strands the
+            // player in cursor mode: Close only releases the capture when CaptureInput is set, so
+            // nothing ever turns it back off. That is the toast case - non-interactive, hittest
+            // false, and no close button to escape with.
+            if (_contract.CaptureInput)
+                _renderer.SetInputCapture(slot, true);
+
             ApplyHudFlags(player, hide: true);
             Render(session);
 
@@ -528,7 +538,7 @@ public sealed class PanelHandle : IDisposable
         }
 
         _logger.LogDebug("[Panorama] restored {Count} viewer(s) of menu {MenuId} after world reset",
-            _sessions.Count, Id);
+            reopen.Count, Id);
     }
 
     /// <summary>
