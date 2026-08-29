@@ -114,6 +114,11 @@ public static class Panorama
         plugin.RegisterListener<Listeners.OnMapStart>(OnMapStart);
         plugin.RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect);
 
+        // HUD flags live on the pawn, and respawning hands the player a fresh one with the field
+        // reset. Without this, a menu that hides the crosshair loses it the first time its owner
+        // respawns and the crosshair draws over the panel.
+        plugin.RegisterEventHandler<EventPlayerSpawn>(OnPlayerSpawn);
+
         // Chat is the only text channel a player has, so it is where prompts are answered. Hooking
         // the commands rather than EventPlayerChat is deliberate: a command listener can return
         // Handled and actually suppress the message, which an event handler cannot.
@@ -374,6 +379,24 @@ public static class Panorama
     }
 
     private static void OnMapStart(string mapName) => WorldReset();
+
+    private static HookResult OnPlayerSpawn(EventPlayerSpawn @event, GameEventInfo info)
+    {
+        if (@event.Userid is { IsValid: true } player)
+        {
+            // Deferred a frame: at the moment the event fires the new pawn is not reliably
+            // attached yet, and writing the flags then silently does nothing.
+            Server.NextFrame(() =>
+            {
+                if (player is not { IsValid: true }) return;
+
+                foreach (var handle in Handles.ToList())
+                    handle.OnPlayerSpawn(player);
+            });
+        }
+
+        return HookResult.Continue;
+    }
 
     private static HookResult OnPlayerDisconnect(EventPlayerDisconnect @event, GameEventInfo info)
     {

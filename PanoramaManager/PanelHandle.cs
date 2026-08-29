@@ -575,6 +575,23 @@ public sealed class PanelHandle : IDisposable
     /// mode with no menu on screen to close. Clearing on the way out is cheaper than detecting it on
     /// the way in.</para>
     /// </summary>
+    /// <summary>
+    /// Re-applies this panel's HUD flags for a player who still has it open.
+    ///
+    /// <para>The flags live in <c>m_iHideHUD</c> on the player's PAWN, and respawning gives them a
+    /// new pawn with the field back at its default. So a menu that hid the crosshair loses that the
+    /// moment its owner respawns, and the crosshair reappears on top of the panel. Called from the
+    /// spawn hook rather than reapplied on a timer, because spawning is the only thing that drops
+    /// them.</para>
+    /// </summary>
+    internal void OnPlayerSpawn(CCSPlayerController player)
+    {
+        if (_contract.HideHud == HideHudFlags.None) return;
+        if (player is not { IsValid: true } || !_sessions.ContainsKey(player.Slot)) return;
+
+        ApplyHudFlags(player, hide: true);
+    }
+
     internal void OnPlayerDisconnect(int slot)
     {
         if (!_sessions.Remove(slot))
