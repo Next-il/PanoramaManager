@@ -409,6 +409,24 @@ public static class Panorama
         return HookResult.Continue;
     }
 
+    /// <summary>
+    /// Drops input capture on every menu for a slot, provided none of them is actually open.
+    ///
+    /// <para>Capture lives on the layout entity, so a player is only free of the cursor once every
+    /// entity agrees. One orphaned handle is enough to keep it, and the player has no way to clear
+    /// that themselves.</para>
+    /// </summary>
+    internal static void ReleaseInputIfIdle(int slot)
+    {
+        var handles = Handles.ToList();
+
+        if (handles.Any(handle => handle.HasSession(slot)))
+            return;
+
+        foreach (var handle in handles)
+            handle.ForceReleaseInput(slot);
+    }
+
     private static void WorldReset()
     {
         foreach (var handle in Handles.ToList())

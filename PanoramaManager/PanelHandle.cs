@@ -274,7 +274,16 @@ public sealed class PanelHandle : IDisposable
     private void Close(int slot)
     {
         if (!_sessions.Remove(slot))
+        {
+            // No session, but the player may still be holding a capture from before a world reset.
+            // Releasing one that was never taken is a no-op - the netvar is already false - so this
+            // costs nothing and is the only thing standing between a stale capture and a player who
+            // cannot move.
+            if (_contract.CaptureInput)
+                _renderer.SetInputCapture(slot, false);
+
             return;
+        }
 
         // A prompt outliving its menu would keep swallowing this player's chat with nothing on
         // screen to answer.
@@ -295,6 +304,15 @@ public sealed class PanelHandle : IDisposable
         // - whereas skipping the release when it somehow IS on strands the player in cursor mode
         // with no way out. Dispose and Shutdown both come through here, so this covers them too.
         _renderer.SetInputCapture(slot, false);
+
+        // And again next frame, across EVERY menu rather than just this one.
+        //
+        // Capture is held per layout entity. A player with nothing open should have it on none of
+        // them, but a leaked handle - a menu rebuilt without disposing the old one, a plugin
+        // reloaded - keeps an entity nobody closes, and its capture is enough to hold the cursor
+        // no matter how thoroughly this menu releases its own. Releasing where it was never taken
+        // is a no-op, so the sweep costs nothing and removes the whole class of failure.
+        Server.NextFrame(() => Panorama.ReleaseInputIfIdle(slot));
 
         // Raise on EVERY close, not just a click on the X. A consumer that changed something on open
         // - hid the crosshair, paused a timer - has to be able to undo it, and the closes it cannot
@@ -493,6 +511,16 @@ public sealed class PanelHandle : IDisposable
             .Select(session => (session.Slot, session.Page, session.ActiveTab))
             .ToList();
 
+        // Released BEFORE the sessions are dropped. Restore runs a frame later and skips any player
+        // who is not valid right then, which during a map change is most of them - and once the
+        // session is gone, Close returns at its !_sessions.Remove guard and never reaches the
+        // release. That strands the player in cursor mode with nothing left that knows to undo it.
+        if (_contract.CaptureInput)
+        {
+            foreach (var (slot, _, _) in reopen)
+                _renderer.SetInputCapture(slot, false);
+        }
+
         _sessions.Clear();
         _promptSlots.Clear();
         _renderer.Invalidate();
@@ -510,7 +538,13 @@ public sealed class PanelHandle : IDisposable
         foreach (var (slot, page, tab) in reopen)
         {
             if (Utilities.GetPlayerFromSlot(slot) is not { IsValid: true } player)
+            {
+                // Gone or not ready. Capture was already released in OnWorldReset; repeat it
+                // against the fresh entity, since the one it was set on no longer exists.
+                if (_contract.CaptureInput)
+                    _renderer.SetInputCapture(slot, false);
                 continue;
+            }
 
             var session = new PanelSession
             {
@@ -584,10 +618,38 @@ public sealed class PanelHandle : IDisposable
     /// spawn hook rather than reapplied on a timer, because spawning is the only thing that drops
     /// them.</para>
     /// </summary>
+    /// <summary>Drops this menu's input capture for a slot, whatever the session state. The
+    /// last resort behind css_cursor.</summary>
+    internal void ForceReleaseInput(int slot)
+    {
+        if (_contract.CaptureInput)
+            _renderer.SetInputCapture(slot, false);
+    }
+
+    /// <summary>True when this menu is showing for a slot.</summary>
+    internal bool HasSession(int slot) => _sessions.ContainsKey(slot);
+
     internal void OnPlayerSpawn(CCSPlayerController player)
     {
+        if (player is not { IsValid: true }) return;
+
+        var open = _sessions.ContainsKey(player.Slot);
+
+        // Spawning with no menu open means nothing should be holding the cursor. A capture that
+        // survived a world reset - the entity it was set on is gone, so nothing else will ever turn
+        // it off - leaves the player unable to move and unable to close anything, since a panel
+        // without a session ignores its own close button. Releasing one that was never taken is a
+        // no-op, so this is a safety net rather than a cost.
+        if (!open)
+        {
+            // Swept across every menu, not just this one: an orphaned handle elsewhere is enough
+            // to hold the cursor, and spawning with nothing open is the clearest moment to be sure
+            // the player has none of it.
+            Panorama.ReleaseInputIfIdle(player.Slot);
+            return;
+        }
+
         if (_contract.HideHud == HideHudFlags.None) return;
-        if (player is not { IsValid: true } || !_sessions.ContainsKey(player.Slot)) return;
 
         ApplyHudFlags(player, hide: true);
     }
