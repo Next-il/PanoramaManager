@@ -65,14 +65,27 @@ internal sealed class CustomHudNatives
     public CustomHudNatives(ILogger logger)
         => _logger = logger;
 
-    /// <summary>True once every native needed for per-player dialog variables is bound.</summary>
+    /// <summary>
+    /// True once every native needed for per-player dialog variables is bound AND the state
+    /// addressing those natives depend on is usable.
+    ///
+    /// <para>The three signatures are not the whole story. <see cref="PlayerState"/> refuses to
+    /// compute an address when the stride failed its schema check or an offset is zero, and every
+    /// per-player write goes through it - so with a bad stride this used to report "available"
+    /// while returning IntPtr.Zero for every slot. That is the worst shape a failure can take: the
+    /// cursor appears, classes still work because they go through their own native, and not one
+    /// character of text lands. It also silenced the warn-once, which is gated on this property.</para>
+    ///
+    /// <para>Mirrors PlayerState's guard exactly. If the two ever drift, this lies again.</para>
+    /// </summary>
     public bool CanWritePerPlayerText
     {
         get
         {
             Resolve();
 
-            return _internPanelId is not null && _internVarName is not null && _writeDialogVar is not null;
+            return _internPanelId is not null && _internVarName is not null && _writeDialogVar is not null
+                   && !_strideVerifiedBad && _baseOffset != 0 && _stride != 0 && _countOffset != 0;
         }
     }
 
@@ -188,7 +201,8 @@ internal sealed class CustomHudNatives
         yield return $"          InternPanel=0x{Addr(_internPanelId):X} InternVar=0x{Addr(_internVarName):X} "
                    + $"WriteVar=0x{Addr(_writeDialogVar):X}";
         yield return $"states:   +0x{_countOffset:X}/+0x{_baseOffset:X} stride 0x{_stride:X}"
-                   + (_strideVerifiedBad ? " (MISMATCH - per-player writes disabled)" : "");
+                   + (_strideVerifiedBad ? " (per-player writes disabled)" : "");
+        yield return $"stride check:    {_strideCheck}";
 
         if (_unresolved.Count > 0)
             yield return $"unresolved: {string.Join(", ", _unresolved)}";
@@ -283,6 +297,13 @@ internal sealed class CustomHudNatives
     /// disable the per-player path rather than trust a stale constant: the menu falls back to shared
     /// text, which is a visible limitation instead of an invisible corruption.</para>
     /// </summary>
+    /// <summary>
+    /// How the stride was checked. "No known state class" and "confirmed" both look like success
+    /// from outside, but only one of them means the value is right - and a wrong stride writes each
+    /// player's text into another player's state, which reads as a blank panel rather than an error.
+    /// </summary>
+    private static string _strideCheck = "not checked";
+
     private void VerifyStride()
     {
         foreach (var candidate in new[] { "CCSCustomHudLayoutState", "CustomHudLayoutState" })
@@ -305,6 +326,8 @@ internal sealed class CustomHudNatives
             {
                 _logger.LogDebug(
                     "[Panorama] stride 0x{Stride:X} confirmed against schema {Class}", _stride, candidate);
+
+                _strideCheck = $"confirmed against {candidate}";
             }
             else
             {
@@ -315,14 +338,62 @@ internal sealed class CustomHudNatives
                     _stride, candidate, actual);
 
                 _strideVerifiedBad = true;
+                _strideCheck = $"MISMATCH - schema {candidate} says 0x{actual:X}";
             }
 
             return;
         }
 
-        _logger.LogDebug(
+        _strideCheck = "UNVERIFIED - no known state class in the schema";
+
+        _logger.LogWarning(
             "[Panorama] stride 0x{Stride:X} could not be schema-verified - no known state class. "
-            + "Proceeding on the gamedata value.", _stride);
+            + "Proceeding on the gamedata value, which may be wrong after a CS2 update: a wrong "
+            + "stride writes each player's text into another player's state.", _stride);
+    }
+
+    /// <summary>
+    /// Does <c>m_vecPlayerLayoutStates</c> actually have a state for this slot? Answers the only
+    /// question the engine's own per-player setters refuse to: they are <c>void</c> and silently do
+    /// nothing when the slot has no state, so a call to one proves the function was reached, not
+    /// that anything was written.
+    ///
+    /// <para>No stride, deliberately - this reads the count and the base pointer only, so it stays
+    /// usable when the stride failed its schema check and per-player TEXT is disabled. Classes do
+    /// not go through the stride, and failing them because text is unavailable would close menus
+    /// that render perfectly well.</para>
+    ///
+    /// <para>Where it cannot tell, it says yes. An unconfigured offset or a count that reads as
+    /// nonsense means "we cannot judge this write", and judging it a failure would close every
+    /// working menu on a server whose gamedata is merely incomplete. <see cref="PlayerState"/> takes
+    /// the opposite view of the same readings because it computes an ADDRESS from them - refusing
+    /// there costs one string, guessing costs a wild write.</para>
+    /// </summary>
+    internal bool HasPlayerState(IntPtr entity, uint slot)
+    {
+        if (entity == IntPtr.Zero)
+            return false;
+
+        if (_countOffset == 0 || _baseOffset == 0)
+            return true;
+
+        try
+        {
+            var count = Marshal.ReadInt32(entity + _countOffset);
+
+            // Not a believable count, so the offset is wrong and this reading says nothing.
+            if (count <= 0 || count > MaxPlausibleSlots)
+                return true;
+
+            if (slot >= (uint) count)
+                return false;
+
+            return Marshal.ReadIntPtr(entity + _baseOffset) != IntPtr.Zero;
+        }
+        catch
+        {
+            return true;
+        }
     }
 
     /// <summary>
@@ -515,7 +586,12 @@ internal sealed class CustomHudNatives
             Release(h1);
         }
 
-        return true;
+        // Not "true, we called it". The engine's setter is void and no-ops for a slot with no
+        // allocated state, so returning true unconditionally reported a successful write for a
+        // player who received nothing - and PanelHandle.Render judges its reveal on this. That made
+        // the reveal check a constant: Open took input capture over a root still at opacity 0, which
+        // is a cursor held over a panel nobody can see or close. Ask whether the state exists.
+        return HasPlayerState(entity, slot);
     }
 
     /// <summary>Enable/disable input capture for a slot - required for that player's HUD to receive

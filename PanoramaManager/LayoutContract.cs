@@ -11,9 +11,21 @@ public sealed class LayoutContract
 {
     public static LayoutContract Default { get; } = new();
 
-    /// <summary>Panel whose dialog variables carry the whole menu's state. Panorama scopes dialog
-    /// variables to the panel they're set on, so a single root panel keeps every write in one place.
-    /// A layout that sets variables per-row should set this to null and rely on <see cref="RowPanelId"/>.</summary>
+    /// <summary>
+    /// The id of the layout's root panel, which is also where dialog variables are written.
+    ///
+    /// <para><b>Give every layout its own id.</b> Dialog variables are addressed by INTERNED PANEL
+    /// ID, and interning is by name - so two layouts sharing a root id share their variables, even
+    /// across different plugins with separate entities. Both write <c>menu_title</c> to the same
+    /// place and the last writer wins.</para>
+    ///
+    /// <para>The failure does not look like a collision. It looks like one panel showing another
+    /// panel's title, or rendering completely blank because the other one closed and cleared the
+    /// strings. It comes and goes with whatever else happens to be on screen.</para>
+    ///
+    /// <para>The default exists so a single-layout server works with no configuration. The moment
+    /// there is a second layout anywhere on the box, both need their own.</para>
+    /// </summary>
     public string RootPanelId { get; init; } = "PanoramaRoot";
 
     /// <summary>Number of physical row panels declared in the layout. This is the page size -
@@ -41,6 +53,37 @@ public sealed class LayoutContract
     /// stops them aiming, so a notification that grabs it is worse than no notification.</para>
     /// </summary>
     public bool CaptureInput { get; init; } = true;
+
+    /// <summary>
+    /// Keep this layout off the screens of players who are not viewing it themselves. Default true.
+    ///
+    /// <para><b>Why this is needed.</b> A custom_hud_layout is ONE entity sent to every client, and
+    /// each viewer's content lives in a per-slot state inside it. While spectating a team-mate the
+    /// game shows that player's HUD - and it reads their slot, so their menu, their toast and their
+    /// private announcement all appear on the spectator's screen.</para>
+    ///
+    /// <para>The fix is to stop sending the entity to anyone who has nothing of their own open on
+    /// it: with no entity there is nothing to render, whichever slot the client would have read.
+    /// Note the test is "has a session", NOT "is alive" - blocking dead players instead is the
+    /// obvious approach and it breaks the case where a dead player opens a menu themselves.</para>
+    /// </summary>
+    public bool HideFromSpectators { get; init; } = true;
+
+    /// <summary>
+    /// Whether every viewer sees the same text, so writes may use the global dialog-variable
+    /// setter. Default false: text is per viewer.
+    ///
+    /// <para><b>This is not a performance switch.</b> Global variables are ONE set of strings for
+    /// the whole server, so if two people have a per-viewer layout open at once, each render
+    /// overwrites the other's - both see the last write. That shows up as one player's name
+    /// appearing on someone else's card, a header wearing the footer's text, or a panel that goes
+    /// blank when somebody else closes theirs. Only set this on a layout that genuinely shows
+    /// everyone the same thing, such as a server-wide vote.</para>
+    ///
+    /// <para>When this is false and the per-player natives are unavailable, writes fail rather than
+    /// falling back to global. Failing is recoverable; silently sharing state is not.</para>
+    /// </summary>
+    public bool SharedText { get; init; }
 
     /// <summary>
     /// Parts of the base HUD to hide while this menu is open, restored on close.

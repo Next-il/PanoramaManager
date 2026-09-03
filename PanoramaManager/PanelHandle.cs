@@ -29,7 +29,43 @@ public sealed class PanelHandle : IDisposable
     private readonly Dictionary<string, string>    _variants = new();
     private readonly HashSet<int>                 _promptSlots = new();
 
+    /// <summary>
+    /// Every class this handle has turned ON for one viewer through <see cref="SetClassFor"/>, so
+    /// closing can take them off again.
+    ///
+    /// <para>Without this a per-viewer class is set once and never removed by anything: the
+    /// consumer's own bookkeeping is discarded when its menu state goes, and the class lives on the
+    /// entity, which the engine preserves across round restarts. The progress bar frozen at 60% for
+    /// the rest of the map is this - one w-class left on, and the stylesheet takes the widest.</para>
+    /// </summary>
+    private readonly Dictionary<int, HashSet<(string PanelId, string ClassName)>> _classesBySlot = new();
+
     private bool _disposed;
+
+    /// <summary>
+    /// Slots this handle believes are holding its input capture. Diagnostic only - nothing branches
+    /// on it, because the netvar is the truth and a stale belief here must never stop a release.
+    ///
+    /// <para>A refused release deliberately LEAVES the slot recorded. The failure being hunted is a
+    /// capture held with no panel behind it, and a release that did not reach the client is one of
+    /// the ways to get there; dropping the record on a failed write would hide exactly that.</para>
+    /// </summary>
+    private readonly HashSet<int> _captureHeld = new();
+
+    /// <summary>Wraps <c>IPanelRenderer.SetInputCapture</c> so the capture state is recorded. The
+    /// engine call and its return value are unchanged.</summary>
+    private bool SetCapture(int slot, bool enabled)
+    {
+        var written = _renderer.SetInputCapture(slot, enabled);
+
+        if (written)
+        {
+            if (enabled) _captureHeld.Add(slot);
+            else         _captureHeld.Remove(slot);
+        }
+
+        return written;
+    }
 
     internal PanelHandle(string id, string layoutPath, IPanelRenderer renderer, LayoutContract contract, ILogger logger)
     {
@@ -155,10 +191,43 @@ public sealed class PanelHandle : IDisposable
     /// <see cref="SetVariableFor"/>.</summary>
     public PanelHandle SetClassFor(CCSPlayerController player, string panelId, string className, bool enabled)
     {
-        if (player is { IsValid: true } && _sessions.ContainsKey(player.Slot))
-            _renderer.SetClass(player.Slot, panelId, className, enabled);
+        TrySetClassFor(player, panelId, className, enabled);
 
         return this;
+    }
+
+    /// <summary>
+    /// <see cref="SetClassFor"/> with the answer. Returns false when the write did not reach the
+    /// client - no session, no entity, or an unresolved native.
+    ///
+    /// <para>The chaining overload cannot report that, so a caller commits its own state ("the bar
+    /// is at 60% now") on the strength of a write that never landed, and every later toggle is
+    /// computed against a lie. Use this where the class is part of a state machine the caller is
+    /// tracking; the void form is fine for a class it recomputes from scratch each render.</para>
+    /// </summary>
+    public bool TrySetClassFor(CCSPlayerController player, string panelId, string className, bool enabled)
+    {
+        if (player is not { IsValid: true } || !_sessions.ContainsKey(player.Slot))
+            return false;
+
+        var slot = player.Slot;
+
+        // Recorded on intent, not on success. A write that failed leaves nothing to clear, and
+        // clearing it anyway is one refused native call - whereas a write that succeeded and went
+        // unrecorded is a class stuck on for the rest of the map.
+        if (enabled)
+        {
+            if (!_classesBySlot.TryGetValue(slot, out var set))
+                _classesBySlot[slot] = set = new HashSet<(string, string)>();
+
+            set.Add((panelId, className));
+        }
+        else if (_classesBySlot.TryGetValue(slot, out var set))
+        {
+            set.Remove((panelId, className));
+        }
+
+        return _renderer.SetClass(slot, panelId, className, enabled);
     }
 
     public PanelHandle SetVariable(string name, string value)
@@ -180,19 +249,84 @@ public sealed class PanelHandle : IDisposable
         var session = new PanelSession
         {
             Slot      = player.Slot,
+            SteamId   = player.SteamID,
             Token     = Guid.NewGuid().ToString("N")[..12],
             ActiveTab = Tabs.FirstOrDefault(),
         };
 
         _sessions[player.Slot] = session;
 
-        // Without input capture the layout's buttons never receive the mouse, so an interactive
-        // menu would render correctly and be completely inert. A read-only layout opts out - see
-        // LayoutContract.CaptureInput.
+        // Take off every per-viewer class this handle previously turned on for this slot, BEFORE the
+        // first draw. Close deliberately leaves them so the exit animation still has the panel's
+        // geometry, which means a reopen would otherwise inherit them - and several are "highest
+        // value wins" state, most visibly the now-playing bar's w0..w20 steps, where a leftover w12
+        // beats a fresh w2 and the bar reads 60% forever. Doing it here rather than at close also
+        // means the writes land on a panel nobody is looking at yet.
+        //
+        // The liveness check comes FIRST, and the record is only dropped once the removals below
+        // have actually been written. The other order dropped it either way: Remove is the left
+        // operand, so a false IsEntityAlive forgot every class this handle had turned on for the
+        // slot without taking a single one off. IsEntityAlive is false whenever our cached index is
+        // unresolved, which is not the same as the entity being gone - Render is the very next
+        // statement here, and it resolves by ADOPTING a live entity for this layout when there is
+        // one. The classes come straight back, now untracked, and nothing in the process knows they
+        // exist: no later scrub, close or reset can reach them for the rest of the map.
+        if (_renderer.IsEntityAlive() && _classesBySlot.Remove(player.Slot, out var stale))
+        {
+            foreach (var (panelId, className) in stale)
+            {
+                // Never the root. Turning a class OFF is indistinguishable from never setting it,
+                // so scrubbing the root strips whatever the LAYOUT declared statically on it too -
+                // nowplaying_hud.xml ships class="hud-root hud-card accent-gold np-root pos-top",
+                // and taking pos-top off leaves the card with no pos- class at all, which the
+                // stylesheet renders dead centre. Root classes are structural and every draw
+                // rewrites them anyway; the transient state that actually needed scrubbing lives on
+                // child panels (np_bar's w0..w20 being the case this was built for).
+                if (panelId == _contract.RootPanelId) continue;
+
+                _renderer.SetClass(player.Slot, panelId, className, false);
+            }
+        }
+
+        bool drawn;
+
+        try
+        {
+            drawn = Render(session);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Panorama] first draw of menu {MenuId} threw for {Player}; closing it",
+                Id, player.PlayerName);
+
+            Close(session.Slot);
+            return;
+        }
+
+        // A render that wrote nothing is the same failure as one that threw, and it is the more
+        // common one: the renderer returns false rather than throwing on every path - no entity,
+        // an unresolved native, a refused per-player write - so dropping those return values made a
+        // dead render indistinguishable from a live one. The player then held a cursor with nothing
+        // on screen and no close button to escape with, and reopening only repeated it.
+        if (!drawn)
+        {
+            _logger.LogError(
+                "[Panorama] first draw of menu {MenuId} for {Player} wrote nothing - no entity, or "
+                + "the natives are unresolved. Closing it rather than leaving a cursor over an empty "
+                + "screen; run css_panorama_diag.", Id, player.PlayerName);
+
+            Close(session.Slot);
+            return;
+        }
+
+        // Taken AFTER the first draw succeeds, not before. Without input capture the layout's
+        // buttons never receive the mouse, so an interactive menu renders correctly and is
+        // completely inert - but taking it first means every failure above strands the player in
+        // cursor mode. A read-only layout opts out entirely; see LayoutContract.CaptureInput.
         if (_contract.CaptureInput)
-            _renderer.SetInputCapture(session.Slot, true);
+            SetCapture(session.Slot, true);
+
         ApplyHudFlags(player, hide: true);
-        Render(session);
     }
 
     /// <summary>Hides the menu for a player and drops their session.</summary>
@@ -228,31 +362,173 @@ public sealed class PanelHandle : IDisposable
     /// <para>Only one prompt per player at a time; starting a second abandons the first. A prompt is
     /// also abandoned if the menu closes underneath it.</para>
     /// </summary>
+    /// <summary>
+    /// Two-argument overload, kept for binary compatibility.
+    ///
+    /// <para>Adding the optional <c>replace</c> parameter to the three-arg method is source
+    /// compatible but NOT binary compatible: a plugin compiled against an older PanoramaManager
+    /// emits a MemberRef to the two-arg signature, and only this dll is redeployed, so without this
+    /// it throws MissingMethodException at the first prompt. Shared/Examples/TextInput does exactly
+    /// that.</para>
+    /// </summary>
     public PanelHandle PromptText(CCSPlayerController player, TextPrompt prompt)
+        => PromptText(player, prompt, false);
+
+    /// <param name="player">Who to ask.</param>
+    /// <param name="prompt">What to ask, and what to do with the answer.</param>
+    /// <param name="replace">
+    /// Replace a prompt this player already has pending on this menu. Default false, and that
+    /// default is load-bearing: a prompt is naturally armed from the code that draws the view, and
+    /// a view redraws on every click. Re-arming there reprints the hint and discards the pending
+    /// capture, so the player watches the instruction repeat and their typing fall through to
+    /// public chat. Ignoring a duplicate arm makes the obvious way to write it the correct one.
+    /// Pass true only to deliberately swap the question being asked.
+    /// </param>
+    public PanelHandle PromptText(CCSPlayerController player, TextPrompt prompt, bool replace = false)
     {
-        if (player is { IsValid: true } && _sessions.ContainsKey(player.Slot))
-        {
-            _promptSlots.Add(player.Slot);
-            Panorama.BeginPrompt(this, player, prompt);
-        }
+        TryPromptText(player, prompt, replace);
+        return this;
+    }
+
+    /// <summary>
+    /// <see cref="PromptText(CCSPlayerController, TextPrompt, bool)"/>, but says whether a prompt is
+    /// now actually pending.
+    ///
+    /// <para>PromptText declines silently - no session on this slot (a world reset between the drop
+    /// and Restore), or one already pending without <paramref name="replace"/> - and returns the
+    /// handle either way, so a caller that sets its own "asked already" flag up front can leave it
+    /// stuck true with nothing behind it and never ask again.</para>
+    /// </summary>
+    public bool TryPromptText(CCSPlayerController player, TextPrompt prompt, bool replace = false)
+    {
+        if (player is not { IsValid: true } || !_sessions.ContainsKey(player.Slot))
+            return false;
+
+        // Asked of Panorama, not of _promptSlots. That set is this menu's own bookkeeping and
+        // can outlive the prompt it describes; Prompts is what OnSay reads. Guarding on the
+        // wrong one turns a stale entry into a menu that never asks again and never explains
+        // why - the hint stops appearing and typing falls through to public chat.
+        if (!replace && Panorama.HasPendingPrompt(player.Slot))
+            return false;
+
+        _promptSlots.Add(player.Slot);
+        Panorama.BeginPrompt(this, player, prompt);
+
+        // If BeginPrompt declined for any reason, do not leave this menu believing it asked.
+        if (Panorama.HasPendingPrompt(player.Slot))
+            return true;
+
+        _promptSlots.Remove(player.Slot);
+        return false;
+    }
+
+    /// <summary>
+    /// Drops a pending prompt for this player without closing the menu.
+    ///
+    /// <para>Leaving the view that asked is not the same as answering it. Without this the prompt
+    /// stayed pending: the player's next chat message was swallowed by OnSay, delivered to a
+    /// handler whose view is gone, and never appeared anywhere - for the rest of the timeout. Call
+    /// it AFTER clearing the view state, so the Abandoned delivery re-enters the consumer with the
+    /// view already closed and cannot draw it back.</para>
+    /// </summary>
+    public PanelHandle CancelPrompt(CCSPlayerController player)
+    {
+        if (player is { IsValid: true } && _promptSlots.Contains(player.Slot))
+            Panorama.CancelPrompt(player.Slot, TextPromptOutcome.Abandoned);
 
         return this;
     }
 
     /// <summary>Echoes a finished prompt into the layout. Called by <see cref="Panorama"/>.</summary>
-    internal void OnPromptResult(TextPrompt prompt, TextPromptResult result)
+    internal void OnPromptResult(int slot, TextPrompt prompt, TextPromptResult result)
     {
-        foreach (var slot in _promptSlots.ToList())
-        {
-            _promptSlots.Remove(slot);
+        // One slot, not every slot. Sweeping all of _promptSlots meant one player finishing - or
+        // now, disconnecting, since ResetSlot cancels prompts - wiped every other viewer's pending
+        // entry and echoed an empty answer into their variable. Two admins typing an announcement
+        // at once is enough to hit it: their own answer still arrives, but the on-screen echo dies.
+        if (!_promptSlots.Remove(slot)) return;
 
-            if (_sessions.ContainsKey(slot))
-                _renderer.SetVariable(slot, prompt.Variable, result.Text);
-        }
+        if (_sessions.ContainsKey(slot))
+            _renderer.SetVariable(slot, prompt.Variable, result.Text);
     }
 
     /// <summary>How many players currently have this menu open.</summary>
     public int OpenCount => _sessions.Count;
+
+    /// <summary>
+    /// This renderer's live state - the entity it writes into and the native table it writes
+    /// through, read from the objects that actually render.
+    /// </summary>
+    internal string DescribeRenderer() => _renderer.DescribeState();
+
+    /// <summary>
+    /// Two lines per slot this handle has state for, for css_panorama_diag.
+    ///
+    /// <para>Reports the things that come apart and cause the visible bugs: a slot with tracked
+    /// classes but NO session is state nothing will ever take off by itself, and the set of classes
+    /// shows directly whether a structural one (a pos-, an accent) is missing or whether two
+    /// mutually exclusive ones are on at once - which no amount of reading the source can tell you
+    /// about a particular player on a running server.</para>
+    ///
+    /// <para>The classes alone were not enough, and the now-playing bar is why: six cards all
+    /// reading <c>np_bar.w7</c> with a session are either six listeners a third of the way through
+    /// the same song or six cards frozen where the song ended, and the dump was identical either
+    /// way. The state line dates the last draw and counts them, so the two separate at a glance.</para>
+    /// </summary>
+    internal IEnumerable<string> DescribeSlots()
+    {
+        // _captureHeld is in the union, not just consulted per slot. Without it the one state this
+        // whole line of enquiry is about - capture held, session gone, no classes left - visited no
+        // slot at all and printed nothing, which is exactly how a handle reporting "0 viewer(s)"
+        // can be the thing holding a player's cursor.
+        var slots = _sessions.Keys.Concat(_classesBySlot.Keys).Concat(_captureHeld).Distinct().OrderBy(s => s);
+        var now   = DateTime.UtcNow;
+
+        foreach (var slot in slots)
+        {
+            var name = Utilities.GetPlayerFromSlot(slot) is { IsValid: true } p ? p.PlayerName : "<gone>";
+            var classes = _classesBySlot.TryGetValue(slot, out var set) && set.Count > 0
+                ? string.Join(" ", set.OrderBy(c => c.PanelId).ThenBy(c => c.ClassName)
+                                      .Select(c => $"{c.PanelId}.{c.ClassName}"))
+                : "-";
+
+            // The state line is the half that says whether this is a panel or a corpse. The class
+            // dump can only ever repeat what was last written; these say when it was last written,
+            // whether the write that makes the panel visible landed, and whether the player's input
+            // is still being held.
+            string state;
+
+            if (_sessions.TryGetValue(slot, out var session))
+            {
+                var draw = session.LastRenderAt is { } at
+                    ? $"draw {(now - at).TotalSeconds,6:0.0}s ago #{session.RenderCount}"
+                    : "NEVER DRAWN";
+
+                // The reveal is the write the class dump cannot show: it goes through the renderer
+                // directly rather than the tracked SetClassFor path. A root without it sits at
+                // opacity 0 - invisible, still laid out, still taking clicks - which is precisely
+                // the "cursor with nothing on screen" report.
+                var reveal = _contract.RevealClass is { } r
+                    ? (session.Revealed ? $"reveal={r}" : $"reveal={r} FAILED")
+                    : (session.Revealed ? "reveal=unhidden" : "reveal=unhidden FAILED");
+
+                state = $"session age {(now - session.OpenedAt).TotalSeconds,6:0.0}s {draw} {reveal}";
+            }
+            else
+            {
+                state = "NO SESSION";
+            }
+
+            // Reported for a slot with no session too, because that pairing - capture held, session
+            // gone - is the one that leaves a player stuck.
+            var capture = !_contract.CaptureInput ? "capture=n/a"
+                        : _captureHeld.Contains(slot) ? "capture=HELD"
+                        : "capture=off";
+
+            yield return $"slot {slot,-2} {name,-20} {state} {capture}";
+            yield return $"       classes: {classes}";
+        }
+    }
 
     /// <summary>True if this player currently has the menu open.</summary>
     public bool IsOpenFor(CCSPlayerController player)
@@ -271,16 +547,35 @@ public sealed class PanelHandle : IDisposable
         Panorama.Forget(this);
     }
 
-    private void Close(int slot)
+    /// <summary>
+    /// <see cref="Close(CCSPlayerController)"/> for a slot whose controller is gone or not worth
+    /// resolving.
+    ///
+    /// <para>Public because per-player panel state is keyed by slot on both sides of this library,
+    /// and a consumer that drops its own state for a slot has to be able to drop the session with
+    /// it. Without this the consumer could only forget - leaving the library holding a session with
+    /// the reveal class still on and nobody left who will ever redraw or close it, which is a panel
+    /// frozen mid-state for the rest of the map.</para>
+    /// </summary>
+    public void Close(int slot)
     {
         if (!_sessions.Remove(slot))
         {
-            // No session, but the player may still be holding a capture from before a world reset.
-            // Releasing one that was never taken is a no-op - the netvar is already false - so this
-            // costs nothing and is the only thing standing between a stale capture and a player who
+            // No session is NOT nothing to do. The session is this library's bookkeeping; the panel
+            // is the client's, and the two come apart - a world reset drops sessions, a failed first
+            // draw closes one that never drew, a consumer closes twice. Returning here left whatever
+            // was last written still on screen with nothing that would ever take it off: a reveal
+            // class holding an empty card up, per-viewer classes stuck at their last value for the
+            // rest of the map. Scrub unconditionally instead; every write below is a no-op when
+            // there was nothing set.
+            ScrubPanel(slot, clearTrackedClasses: _disposed);
+
+            // The player may also still be holding a capture from before a world reset. Releasing
+            // one that was never taken is a no-op - the netvar is already false - so this costs
+            // nothing and is the only thing standing between a stale capture and a player who
             // cannot move.
             if (_contract.CaptureInput)
-                _renderer.SetInputCapture(slot, false);
+                SetCapture(slot, false);
 
             return;
         }
@@ -290,20 +585,20 @@ public sealed class PanelHandle : IDisposable
         if (_promptSlots.Remove(slot))
             Panorama.CancelPrompt(slot, TextPromptOutcome.Abandoned);
 
-        // Tell the layout it is closed. Clearing the rows on their own leaves an empty card sitting
-        // on screen - the layout has no idea what "closed" means, it only knows what classes it was
-        // last told to wear.
-        if (_contract.RevealClass is { } reveal)
-            _renderer.SetClass(slot, _contract.RootPanelId, reveal, false);
-        else
-            _renderer.SetClass(slot, _contract.RootPanelId, _contract.HiddenClass, true);
-        _renderer.RenderRows(slot, Array.Empty<MenuItem>());
+        // clearTrackedClasses follows _disposed, which Dispose sets before it closes anything. A
+        // normal close leaves the per-viewer classes on so the CSS exit animation still has the
+        // panel's geometry, and relies on the next Open to scrub them. A Dispose has no next Open:
+        // the record goes with the handle while the classes stay on an entity that outlives it -
+        // custom_hud_layout survives a round restart and the next handle for this layout ADOPTS it
+        // - so a reloaded plugin inherits classes nothing can name any more. There is no exit
+        // animation to protect when the handle is going away.
+        ScrubPanel(slot, clearTrackedClasses: _disposed);
 
         // Released unconditionally, unlike Open which is guarded. Turning capture off for a layout
         // that never turned it on is a no-op - the netvar is already false, so nothing is even sent
         // - whereas skipping the release when it somehow IS on strands the player in cursor mode
         // with no way out. Dispose and Shutdown both come through here, so this covers them too.
-        _renderer.SetInputCapture(slot, false);
+        SetCapture(slot, false);
 
         // And again next frame, across EVERY menu rather than just this one.
         //
@@ -325,7 +620,85 @@ public sealed class PanelHandle : IDisposable
         }
     }
 
-    private void Render(PanelSession session)
+    /// <summary>
+    /// Puts the layout back the way it was before this handle touched it, for one viewer.
+    ///
+    /// <para>Hiding the root is not enough on its own. Classes are per (slot, panel, name) on an
+    /// entity that survives round restarts, so anything still set is simply inherited - by this
+    /// player on their next open, or by the next player to take the slot. Tell the layout it is
+    /// closed, empty the rows, and take back every class this handle turned on.</para>
+    /// </summary>
+    /// <summary>
+    /// Hides one viewer's panel.
+    ///
+    /// <para><paramref name="clearTrackedClasses"/> is false for a normal close and true only when
+    /// the slot is being reset. The classes a consumer sets are not all transient - a position, an
+    /// accent, a size modifier are structural, and the CSS exit animation is written against them.
+    /// Stripping them at close pulled the panel's own geometry out from under the animation: the
+    /// now-playing card lost pos-top and snapped to the middle, the admin panel lost its height
+    /// constraint and grew. Only the reveal class comes off here; the rest is left alone so the
+    /// panel exits looking like itself.</para>
+    ///
+    /// <para>Leftovers are still dealt with, just not here - Open scrubs before the first draw, so
+    /// a reopened panel never inherits a stale class (a w-step bar being the case that bit), and
+    /// ResetSlot scrubs on the way out so the next occupant of the slot inherits nothing.</para>
+    /// </summary>
+    private void ScrubPanel(int slot, bool clearTrackedClasses)
+    {
+        // No entity means nothing to scrub, and asking the renderer to write would SPAWN one -
+        // building a layout entity for the sole purpose of telling it to hide.
+        //
+        // Checked BEFORE the tracked set is taken, not after. Taking it first forgot every class
+        // this handle had turned on for the slot and then returned without removing any of them,
+        // which is what made a leftover permanent: this record is the only thing in the process that
+        // knows which classes were set, and a false IsEntityAlive means "our index does not resolve
+        // right now", not "the entity is gone" - the next Resolve adopts a live entity for this
+        // layout when there is one, wearing every class we just forgot.
+        if (!_renderer.IsEntityAlive())
+            return;
+
+        // Taken only now that the removals at the bottom will actually be written.
+        var tracked = clearTrackedClasses && _classesBySlot.Remove(slot, out var set) ? set : null;
+
+        // Tell the layout it is closed. Clearing the rows on their own leaves an empty card sitting
+        // on screen - the layout has no idea what "closed" means, it only knows what classes it was
+        // last told to wear.
+        if (_contract.RevealClass is { } reveal)
+            _renderer.SetClass(slot, _contract.RootPanelId, reveal, false);
+        else
+            _renderer.SetClass(slot, _contract.RootPanelId, _contract.HiddenClass, true);
+
+        _renderer.RenderRows(slot, Array.Empty<MenuItem>());
+
+        if (tracked is null)
+            return;
+
+        // Every per-viewer class this handle turned on, taken back off. The consumer cannot do this
+        // itself once its own state is gone, and the entity survives round restarts - so anything
+        // left here is worn for the rest of the map, by this player and then by the next one to
+        // take the slot.
+        foreach (var (panelId, className) in tracked)
+        {
+            // Same reasoning as Open's scrub: the root's classes are the panel's own geometry and
+            // are partly declared by the layout, so removing them is not undoing our own work. The
+            // reveal class is the one root class this method does take off, deliberately, above.
+            if (panelId == _contract.RootPanelId) continue;
+
+            _renderer.SetClass(slot, panelId, className, false);
+        }
+    }
+
+    /// <summary>
+    /// Draws one viewer's page. Returns false if the draw did not reach the client.
+    ///
+    /// <para>Only the two writes every layout must have are judged: the reveal that makes the panel
+    /// visible, and the title. Both fail for the reasons that matter - no entity, unresolved
+    /// natives, per-player writes refused - and neither is optional in any layout the contract
+    /// describes. The rest is left best-effort on purpose: a missing tab panel or a variable a
+    /// layout does not declare is a layout detail, not a dead render, and failing the draw on one
+    /// would close working menus.</para>
+    /// </summary>
+    private bool Render(PanelSession session)
     {
         var page  = Math.Clamp(session.Page, 0, PageCount - 1);
         session.Page = page;
@@ -337,16 +710,19 @@ public sealed class PanelHandle : IDisposable
             session.RowMap[i] = rows[i];
 
         // Undo whatever Close did. Open on a fresh session hits this too, harmlessly.
-        if (_contract.RevealClass is { } reveal)
-            _renderer.SetClass(session.Slot, _contract.RootPanelId, reveal, true);
-        else
-            _renderer.SetClass(session.Slot, _contract.RootPanelId, _contract.HiddenClass, false);
+        var revealed = _contract.RevealClass is { } reveal
+            ? _renderer.SetClass(session.Slot, _contract.RootPanelId, reveal, true)
+            : _renderer.SetClass(session.Slot, _contract.RootPanelId, _contract.HiddenClass, false);
 
         foreach (var (group, value) in _variants)
             _renderer.SetClass(session.Slot, _contract.RootPanelId, $"{group}-{value}", true);
 
         _renderer.RenderRows(session.Slot, rows);
-        _renderer.SetVariable(session.Slot, _contract.TitleVar, Title);
+
+        // Deliberately not short-circuited - the draw finishes either way, and a half-written panel
+        // that reports failure is closed, not left half-drawn.
+        var titled = _renderer.SetVariable(session.Slot, _contract.TitleVar, Title);
+
         _renderer.SetVariable(session.Slot, _contract.SubtitleVar, Subtitle);
         _renderer.SetVariable(session.Slot, _contract.PageVar, $"{page + 1} / {PageCount}");
         _renderer.SetClass(session.Slot, _contract.RootPanelId, _contract.PagedClass, PageCount > 1);
@@ -361,6 +737,16 @@ public sealed class PanelHandle : IDisposable
             _renderer.SetClass(session.Slot, _contract.TabPageId(tab), _contract.ActiveClass, active);
             _renderer.SetClass(session.Slot, _contract.TabPageId(tab), _contract.HiddenClass, !active);
         }
+
+        // Bookkeeping for css_panorama_diag, and nothing else reads it. Both halves are invisible
+        // from outside: the reveal is written here rather than through the tracked SetClassFor path,
+        // so the class dump never shows it, and a session that stopped being redrawn looks exactly
+        // like one redrawn a moment ago.
+        session.LastRenderAt = DateTime.UtcNow;
+        session.RenderCount++;
+        session.Revealed = revealed;
+
+        return revealed && titled;
     }
 
     /// <summary>Resolves a raw click against this handle. Returns false if it wasn't ours, so the
@@ -370,13 +756,18 @@ public sealed class PanelHandle : IDisposable
         if (raw.Player is not { IsValid: true } player)
             return false;
 
+        // The session is asked FIRST, and the order is load-bearing: OwnsEntity resolves through
+        // the renderer, which spawns when nothing is cached, so asking it first meant every click
+        // anywhere spawned a layout entity for every menu the clicker does not have open. Duplicate
+        // entities for one layout are how a click gets routed to entity A while the client draws
+        // entity B, which reads as "clicks stopped landing" and is invisible from the server.
+        if (!_sessions.TryGetValue(player.Slot, out var session))
+            return false;
+
         // When the transport knows which layout was clicked, that decides it. Every layout declares
         // its own row0_btn, so with two menus open for one player the element id is ambiguous and
         // session matching alone would hand the click to whichever handle was created first.
         if (raw.Layout != IntPtr.Zero && !_renderer.OwnsEntity(raw.Layout))
-            return false;
-
-        if (!_sessions.TryGetValue(player.Slot, out var session))
             return false;
 
         // Spoofable transports carry a token; an unspoofable one (the engine click hook) doesn't.
@@ -507,8 +898,47 @@ public sealed class PanelHandle : IDisposable
     /// </summary>
     internal void OnWorldReset()
     {
+        // A round restart does NOT delete this entity - Valve put custom_hud_layout on the engine's
+        // preserved-classname list, so it survives the wipe that takes ordinary non-player entities.
+        // A map change still takes it.
+        //
+        // Assuming death unconditionally was actively harmful: Invalidate only forgets our index, so
+        // a live entity was orphaned rather than replaced, a duplicate was spawned a frame later,
+        // and every consumer was told to redraw a panel that had never actually gone away. Once per
+        // round, for the life of the map.
+        //
+        // Still tell consumers to redraw. The entity survived, but that is not a promise the client
+        // kept the panel it was drawing, and a redraw is cheap next to a blank card.
+        if (_renderer.IsEntityAlive())
+        {
+            foreach (var session in _sessions.Values.ToList())
+            {
+                if (Utilities.GetPlayerFromSlot(session.Slot) is not { IsValid: true } player)
+                    continue;
+
+                // The slot is occupied - but by whom? A session outlives the player it belongs to
+                // whenever the disconnect was missed, and the next occupant inherits it. Restored
+                // would then hand a consumer somebody else's menu state under a live controller,
+                // which is how a stranger's admin panel ends up rendered for whoever took the slot.
+                if (player.SteamID != session.SteamId)
+                {
+                    _logger.LogWarning(
+                        "[Panorama] menu {MenuId} had a session on slot {Slot} belonging to another "
+                        + "player; discarding it rather than restoring it for {Player}.",
+                        Id, session.Slot, player.PlayerName);
+
+                    ResetSlot(session.Slot);
+                    continue;
+                }
+
+                Raise(player, PanelAction.Restored, _contract.RootPanelId, null, session.Page, Array.Empty<string>());
+            }
+
+            return;
+        }
+
         var reopen = _sessions.Values
-            .Select(session => (session.Slot, session.Page, session.ActiveTab))
+            .Select(session => (session.Slot, session.SteamId, session.Page, session.ActiveTab))
             .ToList();
 
         // Released BEFORE the sessions are dropped. Restore runs a frame later and skips any player
@@ -517,11 +947,20 @@ public sealed class PanelHandle : IDisposable
         // release. That strands the player in cursor mode with nothing left that knows to undo it.
         if (_contract.CaptureInput)
         {
-            foreach (var (slot, _, _) in reopen)
-                _renderer.SetInputCapture(slot, false);
+            foreach (var (slot, _, _, _) in reopen)
+                SetCapture(slot, false);
         }
 
         _sessions.Clear();
+
+        // Cancelled, not just forgotten. Clearing the set alone left Panorama still holding the
+        // prompt: it kept swallowing that player's chat for the rest of its timeout with nothing on
+        // screen to answer, and the eventual result bailed at OnPromptResult's !_promptSlots.Remove
+        // guard so it never echoed anywhere. Sessions are already gone above, so delivery cannot
+        // draw into the entity being deleted.
+        foreach (var slot in _promptSlots.ToList())
+            Panorama.CancelPrompt(slot, TextPromptOutcome.Abandoned);
+
         _promptSlots.Clear();
         _renderer.Invalidate();
 
@@ -533,22 +972,32 @@ public sealed class PanelHandle : IDisposable
         Server.NextFrame(() => Restore(reopen));
     }
 
-    private void Restore(List<(int Slot, int Page, string? ActiveTab)> reopen)
+    private void Restore(List<(int Slot, ulong SteamId, int Page, string? ActiveTab)> reopen)
     {
-        foreach (var (slot, page, tab) in reopen)
+        foreach (var (slot, steamId, page, tab) in reopen)
         {
             if (Utilities.GetPlayerFromSlot(slot) is not { IsValid: true } player)
             {
                 // Gone or not ready. Capture was already released in OnWorldReset; repeat it
                 // against the fresh entity, since the one it was set on no longer exists.
                 if (_contract.CaptureInput)
-                    _renderer.SetInputCapture(slot, false);
+                    SetCapture(slot, false);
+                continue;
+            }
+
+            // Same check as the alive branch above, for the same reason: a map change is exactly
+            // when a slot changes hands, and reopening on the slot number alone hands the new
+            // occupant the previous one's menu.
+            if (player.SteamID != steamId)
+            {
+                ResetSlot(slot);
                 continue;
             }
 
             var session = new PanelSession
             {
                 Slot      = slot,
+                SteamId   = steamId,
                 Token     = Guid.NewGuid().ToString("N")[..12],
                 Page      = page,
                 ActiveTab = tab,
@@ -556,15 +1005,26 @@ public sealed class PanelHandle : IDisposable
 
             _sessions[slot] = session;
 
+            // Same failure as a first draw: if the redraw wrote nothing there is no panel to hold a
+            // cursor over, so close instead of capturing input over an empty screen.
+            if (!Render(session))
+            {
+                _logger.LogError(
+                    "[Panorama] menu {MenuId} could not be redrawn for {Player} after a world reset; "
+                    + "closing it.", Id, player.PlayerName);
+
+                Close(slot);
+                continue;
+            }
+
             // Guarded exactly as Open is. Capturing input for a layout that opted out strands the
             // player in cursor mode: Close only releases the capture when CaptureInput is set, so
             // nothing ever turns it back off. That is the toast case - non-interactive, hittest
             // false, and no close button to escape with.
             if (_contract.CaptureInput)
-                _renderer.SetInputCapture(slot, true);
+                SetCapture(slot, true);
 
             ApplyHudFlags(player, hide: true);
-            Render(session);
 
             // The library restored what it knows: rows, title, variables set through the handle.
             // Per-viewer writes it never saw the meaning of are the consumer's to redraw.
@@ -622,12 +1082,53 @@ public sealed class PanelHandle : IDisposable
     /// last resort behind css_cursor.</summary>
     internal void ForceReleaseInput(int slot)
     {
-        if (_contract.CaptureInput)
-            _renderer.SetInputCapture(slot, false);
+        // Guarded on the entity for the same reason ResetSlot is: the renderer resolves by
+        // SPAWNING, so an unguarded release builds a custom_hud_layout for a menu nobody has ever
+        // opened in order to tell it to stop capturing input it was never capturing. This runs on
+        // every close and every spawn, across every handle, so that was a steady drip of entities.
+        if (_contract.CaptureInput && _renderer.IsEntityAlive())
+            SetCapture(slot, false);
     }
 
     /// <summary>True when this menu is showing for a slot.</summary>
     internal bool HasSession(int slot) => _sessions.ContainsKey(slot);
+
+    /// <summary>
+    /// Gets a player out, whatever state this menu is in. Returns true if it had one open.
+    ///
+    /// <para>Behind <c>css_cursor</c>, and the reason that command exists: every automatic release
+    /// is driven from something the stuck player cannot make happen. A capture held over a panel
+    /// the client never drew is not released by respawning (the spawn sweep skips a slot with a
+    /// live session), not by a round restart (the entity is preserved, so sessions and capture are
+    /// deliberately kept), and not by the close button (there is nothing on screen to click). Only
+    /// a reconnect cleared it. Closing is preferred over a bare release so consumers hear about it
+    /// and HUD flags go back.</para>
+    /// </summary>
+    internal bool ReleaseCursor(int slot)
+    {
+        if (!_sessions.ContainsKey(slot))
+        {
+            ForceReleaseInput(slot);
+            return false;
+        }
+
+        Close(slot);
+        return true;
+    }
+
+    /// <summary>
+    /// The entity to hide from this slot, or null when it should be sent as normal.
+    ///
+    /// <para>Called once per player per tick, so it does no work beyond a dictionary lookup and
+    /// never spawns anything.</para>
+    /// </summary>
+    internal uint? EntityToHideFrom(int slot)
+    {
+        if (!_contract.HideFromSpectators) return null;
+        if (_sessions.ContainsKey(slot)) return null;
+
+        return _renderer.EntityIndexIfSpawned;
+    }
 
     internal void OnPlayerSpawn(CCSPlayerController player)
     {
@@ -654,20 +1155,36 @@ public sealed class PanelHandle : IDisposable
         ApplyHudFlags(player, hide: true);
     }
 
-    internal void OnPlayerDisconnect(int slot)
+    /// <summary>
+    /// Wipes this menu's state for one slot, open or not. Called at both ends of a slot's life -
+    /// see <c>Panorama.ResetSlot</c>.
+    ///
+    /// <para>The early return this replaced is what made the leftovers permanent: no session meant
+    /// nothing to clean up, which is exactly backwards - a slot with no session is precisely the one
+    /// carrying state nobody owns. Every write here is idempotent and silently refused when there is
+    /// nothing set, so running it on every join and every leave costs a handful of native calls.</para>
+    ///
+    /// <para>No Close event and no HUD-flag restore: the controller is gone or belongs to someone
+    /// else, so there is nobody to hand either to. Close covers the cases where there is.</para>
+    /// </summary>
+    internal void ResetSlot(int slot)
     {
-        if (!_sessions.Remove(slot))
-            return;
+        _sessions.Remove(slot);
 
-        _promptSlots.Remove(slot);
+        // Before the renderer work, so the chat handler stops routing to a dead menu even if every
+        // write below is refused.
+        if (_promptSlots.Remove(slot))
+            Panorama.CancelPrompt(slot, TextPromptOutcome.Abandoned);
 
-        // Best-effort: the entity may already be gone, in which case these no-op.
-        _renderer.SetInputCapture(slot, false);
-        _renderer.RenderRows(slot, Array.Empty<MenuItem>());
+        // Unconditional, unlike Open's guarded take: a capture left on strands the next occupant of
+        // this slot in cursor mode with no panel to close, and releasing one never taken is a no-op.
+        // Guarded on the entity only so that a player joining a server where this menu has never
+        // opened is not what spawns its layout entity - a fresh entity captures nobody's input.
+        if (_renderer.IsEntityAlive())
+            SetCapture(slot, false);
 
-        if (_contract.RevealClass is { } reveal)
-            _renderer.SetClass(slot, _contract.RootPanelId, reveal, false);
-        else
-            _renderer.SetClass(slot, _contract.RootPanelId, _contract.HiddenClass, true);
+        // The slot is changing hands, so nothing here is worth preserving and everything left is
+        // inherited by whoever lands on it next.
+        ScrubPanel(slot, clearTrackedClasses: true);
     }
 }

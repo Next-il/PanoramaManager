@@ -28,44 +28,109 @@ internal sealed class PanelEntity
         _logger     = logger;
     }
 
-    /// <summary>Non-player entities are bulk-deleted on round restart and map change. Drop the
-    /// cached index so the next resolve re-spawns instead of binding a recycled slot.</summary>
+    /// <summary>Forgets the cached index so the next resolve re-spawns instead of binding a
+    /// recycled slot. Call this only when the entity is genuinely gone - see <see cref="IsAlive"/>,
+    /// because forgetting a live entity orphans it rather than replacing it.</summary>
     internal void Invalidate() => _index = null;
+
+    /// <summary>The spawned entity's index, or null when nothing is spawned. Read without spawning:
+    /// the transmit check runs every tick for every player and must not create anything.</summary>
+    internal uint? IndexIfSpawned => _index;
+
+    /// <summary>
+    /// Is the entity we spawned still there? Answers without spawning, so a caller can tell
+    /// "the world reset took it" from "the world reset left it alone".
+    ///
+    /// <para>This matters because Valve added <c>custom_hud_layout</c> to the engine's preserved
+    /// classname list, so it is NOT bulk-deleted on a round restart the way an ordinary non-player
+    /// entity is. Treating every round start as a death meant abandoning a live entity, leaking it,
+    /// and spawning a duplicate every round.</para>
+    /// </summary>
+    internal bool IsAlive() => ResolveCached() != null;
+
+    /// <summary>
+    /// The cached entity if it is still ours, else null. Never spawns.
+    ///
+    /// <para>The designer-name check is not redundant with IsValid: entity indices are recycled, so
+    /// a dead slot can come back valid while holding something else entirely - at which point we
+    /// would be writing dialog variables into a stranger's entity.</para>
+    /// </summary>
+    private CBaseEntity? ResolveCached()
+    {
+        if (_index is not { } index) return null;
+
+        var existing = Utilities.GetEntityFromIndex<CBaseEntity>((int) index);
+        if (existing is { IsValid: true } && existing.DesignerName == ClassName)
+            return existing;
+
+        _index = null;
+        return null;
+    }
+
+    /// <summary>
+    /// One line of live entity state for <c>css_panorama_diag</c>. Never spawns, so asking does not
+    /// change the answer.
+    ///
+    /// <para>"unresolved" and "stale" both render as a dead panel and are told apart nowhere else:
+    /// the first means nothing was ever drawn, the second that the entity we drew into is gone and
+    /// every write since has been silently dropped.</para>
+    /// </summary>
+    internal string Describe()
+    {
+        // Read the index BEFORE IsAlive, which clears it when the cached entity turns out to be
+        // gone - otherwise the interesting case prints no index at all.
+        if (_index is not { } cached)
+            return "entity unresolved";
+
+        return IsAlive() ? $"entity live idx {cached}" : $"entity STALE (idx {cached} gone)";
+    }
 
     /// <summary>Resolves the live entity, spawning it on first use or after a world reset.
     /// Returns null if the entity could not be created.</summary>
     internal CBaseEntity? Resolve()
     {
-        if (_index is { } index)
-        {
-            var existing = Utilities.GetEntityFromIndex<CBaseEntity>((int) index);
-            if (existing is { IsValid: true })
-                return existing;
-
-            _index = null;
-        }
-
-        return Spawn();
+        return ResolveWithoutSpawning() ?? Create();
     }
 
-    private CBaseEntity? Spawn()
+    /// <summary>
+    /// The live entity for this layout if there is one, without creating anything.
+    ///
+    /// <para>Stronger than <see cref="IsAlive"/>, weaker than <see cref="Resolve"/>, and the gap
+    /// between those two is where panels get stuck. IsAlive only reads our cached index, so it
+    /// answers "no" for an entity that is alive in the world but whose index we forgot - a world
+    /// reset invalidates the index and the engine preserves the entity - and a caller that reads
+    /// that "no" as "nothing to write into" skips work that the very next Resolve then makes
+    /// visible again, because Resolve adopts. Resolve is not the answer either: a caller that only
+    /// wants to UNDO something must not build a layout entity for the sole purpose of telling it to
+    /// hide. Adoption is the middle ground - one entity walk, and it finds anything this process
+    /// could have written into.</para>
+    /// </summary>
+    internal CBaseEntity? ResolveWithoutSpawning() => ResolveCached() ?? Adopt();
+
+    /// <summary>
+    /// Takes over an entity that is already in the world for this layout, or null if there is none.
+    ///
+    /// <para>Adopting rather than stacking duplicates. DesignerName is the only thing we can match
+    /// on; the layout keyvalue interns into m_strLayout and isn't reachable without a schema class
+    /// for CCSCustomHudLayout. Filter on the layout, don't check it afterwards. Taking the first
+    /// entity of any kind and then asking whether it happens to be ours means that with several
+    /// menus live - each one its own entity, on its own layout - we look at exactly one candidate
+    /// and spawn a duplicate whenever it isn't the right one.</para>
+    /// </summary>
+    private CBaseEntity? Adopt()
     {
-        // Adopt an entity another consumer already spawned for this layout rather than stacking
-        // duplicates. DesignerName is the only thing we can match on; the layout keyvalue interns
-        // into m_strLayout and isn't reachable without a schema class for CCSCustomHudLayout.
-        // Filter on the layout, don't check it afterwards. Taking the first entity of any kind and
-        // then asking whether it happens to be ours means that with several menus live - each one
-        // its own entity, on its own layout - we look at exactly one candidate and spawn a duplicate
-        // whenever it isn't the right one.
         var adopted = Utilities.FindAllEntitiesByDesignerName<CBaseEntity>(ClassName)
             .FirstOrDefault(e => e.IsValid && PanelRegistry.IsOwnedLayout(e.Index, _layoutPath));
 
-        if (adopted is { IsValid: true })
-        {
-            _index = adopted.Index;
-            return adopted;
-        }
+        if (adopted is not { IsValid: true })
+            return null;
 
+        _index = adopted.Index;
+        return adopted;
+    }
+
+    private CBaseEntity? Create()
+    {
         // Raw factory rather than Utilities.CreateEntityByName: an unknown classname comes back as
         // a null pointer here, where the wrapper would hand back a CBaseEntity over address 0 whose
         // IsValid dereferences 0x10.

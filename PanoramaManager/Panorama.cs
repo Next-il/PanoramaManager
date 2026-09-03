@@ -78,8 +78,18 @@ public static class Panorama
     /// <summary>
     /// True if per-viewer dialog variables are available. False means every viewer of a menu shares
     /// one set of strings - see <see cref="UseGlobalDialogVariables"/>.
+    ///
+    /// <para>Asked of the natives on every read rather than snapshotted at <see cref="Init"/>. The
+    /// answer is not fixed at load: the stride check can disable the per-player path, and a consumer
+    /// that cached this once printed "available" for the rest of the map while every text write was
+    /// being refused.</para>
     /// </summary>
-    public static bool CanWritePerPlayerText { get; private set; }
+    public static bool CanWritePerPlayerText
+        => _logger is { } log && (_natives ??= new CustomHudNatives(log)).CanWritePerPlayerText;
+
+    /// <summary>Kept for the property above so the check is a field read rather than an allocation
+    /// per call - the natives themselves are static, this instance is just the accessor.</summary>
+    private static CustomHudNatives? _natives;
 
     /// <summary>
     /// Wires the library to your plugin. Call once from <c>Load</c>.
@@ -103,7 +113,9 @@ public static class Panorama
         // Force signature resolution now rather than on the first menu open, so a broken gamedata
         // file is reported at load instead of the first time somebody opens a menu. This is silent
         // unless something is actually wrong; `css_panorama_diag` prints the full table on demand.
-        CanWritePerPlayerText = new CustomHudNatives(_logger).CanWritePerPlayerText;
+        // The result is deliberately not stored - CanWritePerPlayerText re-asks, see the property.
+        _natives = new CustomHudNatives(_logger);
+        _ = _natives.CanWritePerPlayerText;
 
         _transport = transport ?? new ClickHookTransport(_logger);
         _transport.OnInteraction += Dispatch;
@@ -113,6 +125,24 @@ public static class Panorama
         plugin.RegisterEventHandler<EventRoundStart>(OnRoundStart);
         plugin.RegisterListener<Listeners.OnMapStart>(OnMapStart);
         plugin.RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect);
+
+        // Keeps a layout off the screens of players spectating whoever it belongs to. See
+        // LayoutContract.HideFromSpectators for why the entity has to be withheld rather than
+        // hidden with a class.
+        plugin.RegisterListener<Listeners.CheckTransmit>(OnCheckTransmit);
+
+        // Both ends of a slot's life, because neither one alone is reliable.
+        //
+        // Every scrap of per-player state - reveal class, dialog variables, input capture - lives in
+        // m_vecPlayerLayoutStates[SLOT] on an entity the engine preserves across round restarts, so
+        // it is inherited by whoever takes the slot next and lasts the whole map. The disconnect
+        // EVENT is not enough to clear it: CS2 routinely delivers it with a null or already-invalid
+        // Userid, and the handler cannot then name a slot. OnClientDisconnect is handed the slot as
+        // an int and always fires. OnClientPutInServer is the other half of belt-and-braces - it
+        // clears on the way IN, which also covers state left behind by a crash, a map change or a
+        // plugin reload, none of which produce a disconnect this library ever sees.
+        plugin.RegisterListener<Listeners.OnClientDisconnect>(ResetSlot);
+        plugin.RegisterListener<Listeners.OnClientPutInServer>(ResetSlot);
 
         // HUD flags live on the pawn, and respawning hands the player a fresh one with the field
         // reset. Without this, a menu that hides the crosshair loses it the first time its owner
@@ -125,10 +155,30 @@ public static class Panorama
         plugin.AddCommandListener("say", OnSay, HookMode.Pre);
         plugin.AddCommandListener("say_team", OnSay, HookMode.Pre);
 
+        // Diagnostic, and a second chance at the same message.
+        //
+        // A named listener is one entry in a chain ordered by registration, and anything ahead of
+        // it returning Handled ends the chain. A null listener is registered separately, so it can
+        // be reached when the named one is not - and when neither is, that says the message never
+        // gets to this plugin at all, which is a different problem with a different fix.
+        plugin.AddCommandListener(null, OnAnyCommand, HookMode.Pre);
+
         // One command that answers "is this working", because the alternative is reading five
         // startup lines that have scrolled away. Distilled from the Poc1 probe plugin, which existed
         // only to poke the entity by hand - this is the part of it worth keeping.
         plugin.AddCommand("css_panorama_diag", "Report Panorama native and transport status.", Diagnose);
+
+        // The way out of a stuck cursor, and until now it did not exist - the only thing that
+        // cleared one was reconnecting to the server. Every automatic release is driven by
+        // something the stuck player cannot cause: respawning skips a slot that still has a live
+        // session, a round restart deliberately keeps entity, sessions and capture, and the close
+        // button needs a panel on screen to be clicked.
+        //
+        // Registered by every plugin referencing the library, exactly like css_panorama_diag, and
+        // that is the point: each has its own Handles list in its own load context, so one command
+        // registered six times is what reaches all six. A capture stranded by another plugin is
+        // otherwise unreachable from this one.
+        plugin.AddCommand("css_cursor", "Release a stuck menu cursor.", ReleaseCursor);
 
         if (!_transport.IsInstalled)
         {
@@ -138,7 +188,7 @@ public static class Panorama
         }
     }
 
-    private sealed record PendingPrompt(PanelHandle Menu, TextPrompt Prompt, Timer? Timeout);
+    private sealed record PendingPrompt(int Slot, PanelHandle Menu, TextPrompt Prompt, Timer? Timeout);
 
     private static readonly Dictionary<int, PendingPrompt> Prompts = new();
 
@@ -148,6 +198,11 @@ public static class Panorama
     /// </summary>
     internal static void BeginPrompt(PanelHandle menu, CCSPlayerController player, TextPrompt prompt)
     {
+        // Paired with the line in OnSay. Together they say which half is broken: an arm with no
+        // matching say means the listener is not being reached; neither means it never armed.
+        _logger?.LogInformation("[Panorama] prompt armed for {Player} (slot {Slot})",
+            player.PlayerName, player.Slot);
+
         if (_plugin is null || player is not { IsValid: true })
             return;
 
@@ -160,7 +215,7 @@ public static class Panorama
             ? _plugin.AddTimer(prompt.TimeoutSeconds, () => CancelPrompt(slot, TextPromptOutcome.TimedOut))
             : null;
 
-        Prompts[slot] = new PendingPrompt(menu, prompt, timeout);
+        Prompts[slot] = new PendingPrompt(slot, menu, prompt, timeout);
 
         if (!string.IsNullOrEmpty(prompt.Hint))
             player.PrintToChat(prompt.Hint);
@@ -176,10 +231,80 @@ public static class Panorama
         Deliver(pending, new TextPromptResult(outcome, string.Empty));
     }
 
+    /// <summary>
+    /// Whether this slot has a prompt actually waiting for an answer.
+    ///
+    /// <para>This dictionary is what <see cref="OnSay"/> consults, so it is the only honest answer
+    /// to "am I already asking?". A menu's own bookkeeping can drift out of step with it, and a
+    /// guard built on that instead will either ask twice or - far worse - refuse to ask ever again
+    /// while nothing is listening.</para>
+    /// </summary>
+    internal static bool HasPendingPrompt(int slot) => Prompts.ContainsKey(slot);
+
+    /// <summary>
+    /// The last say this library consumed, as (slot, tick).
+    ///
+    /// <para>Both listeners are registered - the named "say" one and the wildcard - and BOTH fire
+    /// for the same message. The first to run answers the prompt and removes it from
+    /// <see cref="Prompts"/>; the second then finds nothing pending and returns Continue, and a
+    /// Continue after a Handled is what puts the player's answer back into public chat. That is the
+    /// bug this exists to close: "your ban reason appeared in chat".</para>
+    ///
+    /// <para>Keyed on the tick as well as the slot so it expires on its own. Two says from one
+    /// player in the same tick is not a thing a human does, and if it ever happened the cost is one
+    /// swallowed message rather than a leaked one.</para>
+    /// </summary>
+    private static (int Slot, int Tick) _consumedSay = (-1, -1);
+
+    /// <summary>
+    /// Catches chat through the wildcard listener when the named one was pre-empted.
+    ///
+    /// <para>Only looks at say/say_team, and only while a prompt is actually pending - so on a
+    /// server where the named listener works this never does anything, and the message is consumed
+    /// exactly once either way.</para>
+    /// </summary>
+    private static HookResult OnAnyCommand(CCSPlayerController? player, CommandInfo command)
+    {
+        if (Prompts.Count == 0) return HookResult.Continue;
+
+        var name = command.GetArg(0);
+        if (!name.Equals("say", StringComparison.OrdinalIgnoreCase) &&
+            !name.Equals("say_team", StringComparison.OrdinalIgnoreCase))
+            return HookResult.Continue;
+
+        // Only for the player who is actually being asked. Gated on Prompts.Count it named every
+        // player who spoke while any prompt anywhere was pending.
+        if (player is { IsValid: true } && Panorama.HasPendingPrompt(player.Slot))
+            _logger?.LogInformation("[Panorama] say seen by the wildcard listener from {Player}",
+                player.PlayerName);
+
+        return OnSay(player, command);
+    }
+
     private static HookResult OnSay(CCSPlayerController? player, CommandInfo command)
     {
-        if (player is not { IsValid: true } || !Prompts.TryGetValue(player.Slot, out var pending))
+        if (player is not { IsValid: true })
             return HookResult.Continue;
+
+        if (!Prompts.TryGetValue(player.Slot, out var pending))
+        {
+            // Already consumed this very message on the other listener. Handled again, so the
+            // second dispatch does not undo the first one's suppression.
+            return _consumedSay == (player.Slot, Server.TickCount)
+                ? HookResult.Handled
+                : HookResult.Continue;
+        }
+
+        _consumedSay = (player.Slot, Server.TickCount);
+
+        // Logged AFTER the lookup, so it is this player's own answer being logged and not every
+        // other player's chat. Gated on Prompts.Count it copied the whole server's conversation
+        // into the log for as long as one admin sat in a 120s prompt, and buried the one line it
+        // exists to provide: no line means the listener is not being reached - another plugin
+        // handled the message first - and a line means the text arrived and the fault is further in.
+        _logger?.LogInformation(
+            "[Panorama] say reached the prompt listener: player={Player} pending={Pending} text='{Text}'",
+            player.PlayerName, Prompts.Count, command.GetArg(1));
 
         Prompts.Remove(player.Slot);
         pending.Timeout?.Kill();
@@ -211,7 +336,7 @@ public static class Panorama
     {
         try
         {
-            pending.Menu.OnPromptResult(pending.Prompt, result);
+            pending.Menu.OnPromptResult(pending.Slot, pending.Prompt, result);
             pending.Prompt.OnResult?.Invoke(result);
         }
         catch (Exception e)
@@ -231,7 +356,13 @@ public static class Panorama
     [RequiresPermissions("@css/generic")]
     private static void Diagnose(CCSPlayerController? player, CommandInfo command)
     {
-        var natives = new CustomHudNatives(_logger!);
+        // The instance Init built and every CanWritePerPlayerText call since has gone through -
+        // NOT a fresh one. A new CustomHudNatives describes an object that has never rendered
+        // anything, and worse, it reports its own untouched fields: Resolve short-circuits on a
+        // static flag, so the second instance never runs the stride check and prints "not checked"
+        // on a server where the stride was checked and confirmed at load. A diagnostic that
+        // disagrees with the code it is diagnosing is worse than no diagnostic.
+        var natives = _natives ??= new CustomHudNatives(_logger!);
 
         // Every plugin referencing the library has its own copy of these statics and its own
         // registration of this command, so all of them answer. That is worth seeing - their state
@@ -248,10 +379,55 @@ public static class Panorama
         foreach (var handle in Handles)
         {
             command.ReplyToCommand($"[Panorama/{owner}]   {handle.Id} {handle.LayoutPath} ({handle.OpenCount} viewer(s))");
+
+            // The renderer's OWN view, not the block above. Most of the native table is static and
+            // the two normally agree - but "normally agree" is an assumption, and this is where a
+            // handle whose entity died or whose renderer sees a different table becomes visible
+            // instead of being averaged away into one summary line.
+            command.ReplyToCommand($"[Panorama/{owner}]     {handle.DescribeRenderer()}");
+
+            // Per-slot, because the failures that reach a player are per-slot: a class left on with
+            // no session behind it, or a structural class missing so the panel falls back to the
+            // stylesheet's default position.
+            foreach (var line in handle.DescribeSlots())
+                command.ReplyToCommand($"[Panorama/{owner}]     {line}");
         }
 
         SchemaProbe.Report(_logger!);
         command.ReplyToCommand($"[Panorama/{owner}] schema offsets written to the server log.");
+    }
+
+    /// <summary>
+    /// Closes every menu this plugin has open for the caller and drops its input capture.
+    ///
+    /// <para>No permission check: it only ever acts on the caller's own slot, and the player it is
+    /// for is by definition unable to open a menu to prove anything. Closing rather than releasing
+    /// blind means the consumer hears a Close and puts the HUD flags back, and a menu that was
+    /// legitimately open is simply closed - which is what someone typing this is asking for.</para>
+    /// </summary>
+    private static void ReleaseCursor(CCSPlayerController? player, CommandInfo command)
+    {
+        if (player is not { IsValid: true })
+        {
+            command.ReplyToCommand("[Panorama] css_cursor is for players - it acts on your own slot.");
+            return;
+        }
+
+        var closed = 0;
+
+        foreach (var handle in Handles.ToList())
+        {
+            if (handle.ReleaseCursor(player.Slot))
+                closed++;
+        }
+
+        _logger?.LogInformation(
+            "[Panorama] css_cursor from {Player} (slot {Slot}) closed {Closed} of {Total} menu(s)",
+            player.PlayerName, player.Slot, closed, Handles.Count);
+
+        command.ReplyToCommand(closed > 0
+            ? $"[{_plugin?.ModuleName ?? "Panorama"}] closed {closed} menu(s) and released the cursor."
+            : $"[{_plugin?.ModuleName ?? "Panorama"}] no menu was open here; released the cursor anyway.");
     }
 
     /// <summary>Tears everything down. Call from your plugin's <c>Unload</c>.</summary>
@@ -269,8 +445,9 @@ public static class Panorama
             _transport = null;
         }
 
-        _plugin = null;
-        _logger = null;
+        _plugin  = null;
+        _logger  = null;
+        _natives = null;
     }
 
     /// <summary>
@@ -369,6 +546,51 @@ public static class Panorama
             if (handle.TryHandle(raw))
                 return;
         }
+
+        ReportUnclaimed(raw);
+    }
+
+    private static DateTime _lastUnclaimedLog = DateTime.MinValue;
+
+    /// <summary>
+    /// Says something when a click reaches the server and no menu takes it.
+    ///
+    /// <para>"Clicks stopped landing while the panel was still up" had no server-side evidence of
+    /// any kind: the click path drops silently at the controller, at the layout match and at the
+    /// session lookup, and not one of them logged. This is the whole class of report, on one line.</para>
+    ///
+    /// <para>Two shapes only, because every plugin referencing the library hooks the same click
+    /// receiver and therefore sees every click on the server - reporting all of them would be six
+    /// identical lines per click of pure noise. Worth a line: a click whose clicker did not resolve
+    /// at all (no handle anywhere could have claimed it), and a click nobody took while THIS
+    /// context has a menu open for that player. The second is the failure being hunted.</para>
+    /// </summary>
+    private static void ReportUnclaimed(RawInteraction raw)
+    {
+        if (_logger is null)
+            return;
+
+        var open = raw.Player is { IsValid: true } clicker
+                   && Handles.Any(handle => handle.HasSession(clicker.Slot));
+
+        if (raw.Player is not null && !open)
+            return;
+
+        // A stuck panel is clicked repeatedly and angrily; one line every few seconds is enough to
+        // establish it is happening without burying the rest of the log.
+        if ((DateTime.UtcNow - _lastUnclaimedLog).TotalSeconds < 5)
+            return;
+
+        _lastUnclaimedLog = DateTime.UtcNow;
+
+        _logger.LogWarning(
+            "[Panorama] click on '{Element}' from {Player} was claimed by no menu (layout {Layout}, "
+            + "menu open here: {Open}). A null player means the click hook could not resolve the "
+            + "controller; an open menu with no claim means the layout or the session did not match.",
+            raw.ElementId,
+            raw.Player is { IsValid: true } p ? p.PlayerName : "<unresolved>",
+            raw.Layout == IntPtr.Zero ? "unknown" : "supplied",
+            open);
     }
 
     private static HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info)
@@ -378,7 +600,17 @@ public static class Panorama
         return HookResult.Continue;
     }
 
-    private static void OnMapStart(string mapName) => WorldReset();
+    private static void OnMapStart(string mapName)
+    {
+        // Entity indices from the previous map mean nothing on this one, and the registry is what
+        // Spawn consults before adopting an entity instead of creating one. Left standing, a
+        // recycled index can match an entry from the old map and hand a handle a custom_hud_layout
+        // belonging to another layout entirely - which then quietly receives every write meant for
+        // ours. Cleared before any handle resolves anything on the new map.
+        PanelRegistry.ClearLayouts();
+
+        WorldReset();
+    }
 
     private static HookResult OnPlayerSpawn(EventPlayerSpawn @event, GameEventInfo info)
     {
@@ -398,15 +630,40 @@ public static class Panorama
         return HookResult.Continue;
     }
 
+    /// <summary>
+    /// Kept as a third chance at the same slot. The event fires earlier than the listener, while the
+    /// controller is still valid, so it gets the panel off screen sooner - but it is guarded on a
+    /// Userid CS2 often does not supply, which is exactly why it is no longer the only path.
+    /// </summary>
     private static HookResult OnPlayerDisconnect(EventPlayerDisconnect @event, GameEventInfo info)
     {
         if (@event.Userid is { IsValid: true } player)
-        {
-            foreach (var handle in Handles.ToList())
-                handle.OnPlayerDisconnect(player.Slot);
-        }
+            ResetSlot(player.Slot);
 
         return HookResult.Continue;
+    }
+
+    /// <summary>
+    /// Wipes everything the library holds for one slot, whether or not anything thinks it is open.
+    ///
+    /// <para>Slots are recycled and the layout entity outlives their occupants, so anything left
+    /// behind here is inherited by the next player to take the slot: a stuck cursor with no panel to
+    /// close, someone else's rows, a progress bar frozen mid-track, or - through the prompt table -
+    /// their chat being swallowed into the previous occupant's text handler. None of it is
+    /// recoverable by the player, and none of it expires before the map does.</para>
+    ///
+    /// <para>Called from both ends of the slot's life and safe to call repeatedly: every write here
+    /// is idempotent, and clearing state that was never set costs one refused native call.</para>
+    /// </summary>
+    private static void ResetSlot(int slot)
+    {
+        foreach (var handle in Handles.ToList())
+            handle.ResetSlot(slot);
+
+        // After the handles, not before: a handle cancels the prompt it knows about, and this
+        // catches one whose menu was disposed out from under it - the table Panorama.OnSay actually
+        // reads is this one, so a stale entry here is the one that eats the next player's chat.
+        CancelPrompt(slot, TextPromptOutcome.Abandoned);
     }
 
     /// <summary>
@@ -425,6 +682,30 @@ public static class Panorama
 
         foreach (var handle in handles)
             handle.ForceReleaseInput(slot);
+    }
+
+    /// <summary>
+    /// Drops each menu's entity from the transmit list for players who have nothing open on it.
+    ///
+    /// <para>Runs every tick for every player, so it does the least possible: a slot lookup per
+    /// menu, and nothing at all when no menu opts in or none has spawned yet.</para>
+    /// </summary>
+    private static void OnCheckTransmit(CCheckTransmitInfoList infoList)
+    {
+        if (Handles.Count == 0) return;
+
+        foreach (var (info, player) in infoList)
+        {
+            if (player is not { IsValid: true }) continue;
+
+            var slot = player.Slot;
+
+            foreach (var handle in Handles)
+            {
+                if (handle.EntityToHideFrom(slot) is { } index)
+                    info.TransmitEntities.Remove((int) index);
+            }
+        }
     }
 
     private static void WorldReset()
