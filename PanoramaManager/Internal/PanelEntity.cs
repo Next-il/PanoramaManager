@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
@@ -80,9 +80,38 @@ internal sealed class PanelEntity
         // Read the index BEFORE IsAlive, which clears it when the cached entity turns out to be
         // gone - otherwise the interesting case prints no index at all.
         if (_index is not { } cached)
-            return "entity unresolved";
+            return "entity unresolved" + DescribeDuplicates();
 
-        return IsAlive() ? $"entity live idx {cached}" : $"entity STALE (idx {cached} gone)";
+        return (IsAlive() ? $"entity live idx {cached}" : $"entity STALE (idx {cached} gone)")
+             + DescribeDuplicates();
+    }
+
+    /// <summary>
+    /// Says so when the world holds more than one entity for this layout.
+    ///
+    /// <para>The handle reports the one index it happens to hold, which reads as healthy while the
+    /// client draws a different entity nobody writes into any more - "the library says closed, the
+    /// panel is still up" with no other symptom. A plugin reload is the way in: custom_hud_layout is
+    /// preserved, Dispose never kills it, and the new load context's registry cannot recognise the
+    /// old one, so Adopt misses it and Create spawns a second. Diagnostic only, and only asked by
+    /// css_panorama_diag - it walks the entity list.</para>
+    /// </summary>
+    private string DescribeDuplicates()
+    {
+        var live = Utilities.FindAllEntitiesByDesignerName<CBaseEntity>(ClassName)
+                            .Where(e => e.IsValid)
+                            .ToList();
+
+        var owned = live.Count(e => PanelRegistry.IsOwnedLayout(e.Index, _layoutPath));
+
+        // Both numbers, because the owned count alone cannot see the duplicate this method was
+        // written for. PanelRegistry is per load context and only Create writes to it, so the
+        // orphan a reload leaves behind is in nobody's registry: owned reads 1 and the line stays
+        // silent on exactly the failure it exists to catch. The world total is the honest signal -
+        // compare it against the number of distinct layouts the server actually uses.
+        return owned > 1
+            ? $"  DUPLICATE: {owned} entities for this layout ({live.Count} {ClassName} in world)"
+            : $"  ({live.Count} {ClassName} in world, {owned} owned here)";
     }
 
     /// <summary>Resolves the live entity, spawning it on first use or after a world reset.

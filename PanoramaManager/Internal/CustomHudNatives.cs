@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -605,6 +605,10 @@ internal sealed class CustomHudNatives
 
         fn.Invoke(entity, slot, enabled);
 
-        return true;
+        // Same answer SetHasClassForPlayer gives, for the same reason. This setter is void too and
+        // writes into the same per-player state, so "we called it" was being reported as "it
+        // landed" - which is what PanelHandle records its capture belief from. A capture stranded
+        // on a slot with no allocated state printed capture=off in the diagnostic and looked clean.
+        return HasPlayerState(entity, slot);
     }
 }

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using CounterStrikeSharp.API;
@@ -64,6 +64,33 @@ public sealed class PanelHandle : IDisposable
     /// retryable.</para>
     /// </summary>
     private readonly Dictionary<int, bool> _pendingScrub = new();
+
+    /// <summary>
+    /// Slots that were closed a moment ago, and the instant their layout entity may stop being sent
+    /// to them.
+    ///
+    /// <para>The hide a close writes is per-player state INSIDE the layout entity, and
+    /// <see cref="EntityToHideFrom"/> stops that entity being transmitted to any slot with no
+    /// session - which a closing slot loses in the same tick. The end-of-frame snapshot for that
+    /// client then excludes the entity, so the hide is never shipped: the client keeps drawing the
+    /// last state it was told about - reveal class on, fully opaque - until it tears the entity down
+    /// on its own, seconds later. That is the "click Close, panel goes inert, disappears a few
+    /// seconds afterwards" report, on every interactive panel of every plugin, because
+    /// <c>HideFromSpectators</c> defaults on and nothing overrides it.</para>
+    ///
+    /// <para>So keep sending the entity to the closing viewer for a moment longer. Their own state
+    /// is already scrubbed, so they see the exit animation and then nothing; other viewers are
+    /// unaffected, since this is per slot. Entries expire where they are read and are dropped
+    /// outright by the next Open.</para>
+    /// </summary>
+    private readonly Dictionary<int, DateTime> _closingUntil = new();
+
+    /// <summary>
+    /// How long a closed slot keeps receiving the layout entity. Long enough for the hide to reach
+    /// the client and its exit animation to play, short enough that a player who closes a menu and
+    /// starts spectating is not shown the spectated player's panel for any noticeable time.
+    /// </summary>
+    private static readonly TimeSpan CloseTransmitGrace = TimeSpan.FromSeconds(1);
 
     /// <summary>Wraps <c>IPanelRenderer.SetInputCapture</c> so the capture state is recorded. The
     /// engine call and its return value are unchanged.</summary>
@@ -278,6 +305,11 @@ public sealed class PanelHandle : IDisposable
         // a new map it is guaranteed to have found nothing resolvable and left the entry queued.
         // Dropping it here is what stops that entry firing later, against this very panel.
         _pendingScrub.Remove(player.Slot);
+
+        // And it is not closing either - the session above already keeps the entity transmitting,
+        // so the grace has nothing left to do and an expiry left behind would only be read again
+        // after the next close sets a fresh one.
+        _closingUntil.Remove(player.Slot);
 
         // Take off every per-viewer class this handle previously turned on for this slot, BEFORE the
         // first draw. Close deliberately leaves them so the exit animation still has the panel's
@@ -591,6 +623,12 @@ public sealed class PanelHandle : IDisposable
     /// </summary>
     public void Close(int slot)
     {
+        // Before the session goes, and on both branches below. Everything this method does to hide
+        // the panel is written into the layout entity's per-player state, and the transmit hook
+        // stops sending that entity to a slot the instant it has no session - so without this the
+        // writes below never reach the client and the panel stays on screen. See _closingUntil.
+        _closingUntil[slot] = DateTime.UtcNow + CloseTransmitGrace;
+
         if (!_sessions.Remove(slot))
         {
             // No session is NOT nothing to do. The session is this library's bookkeeping; the panel
@@ -675,7 +713,7 @@ public sealed class PanelHandle : IDisposable
     /// a reopened panel never inherits a stale class (a w-step bar being the case that bit), and
     /// ResetSlot scrubs on the way out so the next occupant of the slot inherits nothing.</para>
     /// </summary>
-    private void ScrubPanel(int slot, bool clearTrackedClasses)
+    private void ScrubPanel(int slot, bool clearTrackedClasses, bool fromDrain = false)
     {
         // Resolvable, not alive. IsEntityAlive only consults the cached index, and a world reset
         // invalidates that index while the engine keeps the entity - so it reported "dead" for an
@@ -706,18 +744,42 @@ public sealed class PanelHandle : IDisposable
             return;
         }
 
+        // Tell the layout it is closed. Clearing the rows on their own leaves an empty card sitting
+        // on screen - the layout has no idea what "closed" means, it only knows what classes it was
+        // last told to wear.
+        //
+        // Issued BEFORE the tracked set is taken, and its answer is kept. Both matter: a refusal
+        // below has to leave the tracked classes where they are so the retry can still name them.
+        var hidden = _contract.RevealClass is { } reveal
+            ? _renderer.SetClass(slot, _contract.RootPanelId, reveal, false)
+            : _renderer.SetClass(slot, _contract.RootPanelId, _contract.HiddenClass, true);
+
+        // A resolvable entity is not a landed write, and this return was being thrown away. SetClass
+        // answers HasPlayerState - the same answer Render judges its first draw on - so the hide can
+        // be refused for a slot whose per-player state is not allocated, and that lands in exactly
+        // the state the unresolvable branch above exists to prevent: panel drawn, reveal class on,
+        // no session behind it, nothing retrying. It was also unobservable, because the diagnostic
+        // only prints Revealed while a session exists. Queue it the same way.
+        if (!hidden)
+        {
+            _pendingScrub[slot] = clearTrackedClasses
+                               || (_pendingScrub.TryGetValue(slot, out var stillOwed) && stillOwed);
+
+            // Not rescheduled from the drain itself. The drain terminates because ScrubPanel only
+            // re-queues when the entity is unresolvable, which it checks once up front; this branch
+            // can re-queue with a live entity, so a slot whose state is never allocated - a
+            // disconnected one - would retry every frame for the rest of the map. Left queued
+            // instead, for the next Open, spawn or world reset to drain.
+            if (!fromDrain)
+                Server.NextFrame(DrainPendingScrubs);
+
+            return;
+        }
+
         _pendingScrub.Remove(slot);
 
         // Taken only now that the removals at the bottom will actually be written.
         var tracked = clearTrackedClasses && _classesBySlot.Remove(slot, out var set) ? set : null;
-
-        // Tell the layout it is closed. Clearing the rows on their own leaves an empty card sitting
-        // on screen - the layout has no idea what "closed" means, it only knows what classes it was
-        // last told to wear.
-        if (_contract.RevealClass is { } reveal)
-            _renderer.SetClass(slot, _contract.RootPanelId, reveal, false);
-        else
-            _renderer.SetClass(slot, _contract.RootPanelId, _contract.HiddenClass, true);
 
         _renderer.RenderRows(slot, Array.Empty<MenuItem>());
 
@@ -753,7 +815,9 @@ public sealed class PanelHandle : IDisposable
             return;
 
         // Asked once here rather than once per slot, and it is also what makes the loop terminate:
-        // ScrubPanel can only re-queue a slot when this is false.
+        // this is the only re-queue path ScrubPanel reschedules from, and it cannot be reached from
+        // inside the loop. Its other re-queue - a refused write on a live entity - is passed
+        // fromDrain below precisely so it does not schedule another frame from here.
         if (!_renderer.IsEntityResolvable())
             return;
 
@@ -772,7 +836,7 @@ public sealed class PanelHandle : IDisposable
                 continue;
             }
 
-            ScrubPanel(slot, clearTrackedClasses);
+            ScrubPanel(slot, clearTrackedClasses, fromDrain: true);
         }
     }
 
@@ -1202,14 +1266,16 @@ public sealed class PanelHandle : IDisposable
     /// </summary>
     internal bool ReleaseCursor(int slot)
     {
-        if (!_sessions.ContainsKey(slot))
-        {
-            ForceReleaseInput(slot);
-            return false;
-        }
+        // Close either way, rather than a bare release for a slot with no session. No session is the
+        // state this command exists FOR: a panel left drawn with its reveal class on and its session
+        // already dropped ignores the close button, so the player has nothing to click and the one
+        // escape hatch was taking the branch that scrubs nothing and answering "released anyway".
+        // Close(int) is a no-op-plus-scrub in that case and releases capture on the way through, so
+        // it does everything ForceReleaseInput did and the thing it did not.
+        var had = _sessions.ContainsKey(slot);
 
         Close(slot);
-        return true;
+        return had;
     }
 
     /// <summary>
@@ -1222,6 +1288,15 @@ public sealed class PanelHandle : IDisposable
     {
         if (!_contract.HideFromSpectators) return null;
         if (_sessions.ContainsKey(slot)) return null;
+
+        // Recently closed: keep sending the entity so the hide that close wrote actually ships.
+        // Expired here rather than on a timer - this is the only reader, and it runs every tick.
+        if (_closingUntil.TryGetValue(slot, out var until))
+        {
+            if (DateTime.UtcNow < until) return null;
+
+            _closingUntil.Remove(slot);
+        }
 
         return _renderer.EntityIndexIfSpawned;
     }
@@ -1269,6 +1344,10 @@ public sealed class PanelHandle : IDisposable
     /// </summary>
     internal void ResetSlot(int slot)
     {
+        // Same reason as Close: the scrub at the bottom is a write into the entity, and it only
+        // reaches the client while the entity is still being transmitted to this slot.
+        _closingUntil[slot] = DateTime.UtcNow + CloseTransmitGrace;
+
         _sessions.Remove(slot);
 
         // Before the renderer work, so the chat handler stops routing to a dead menu even if every

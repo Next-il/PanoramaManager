@@ -298,7 +298,7 @@ public static class Panorama
         // Prompts before the next listener in this same dispatch reads it, and a check placed on
         // the miss branch would let that listener consume the line all over again.
         if (_consumedSay == (player.Slot, Server.TickCount))
-            return HookResult.Handled;
+            return HookResult.Stop;
 
         if (!Prompts.TryGetValue(player.Slot, out var pending))
             return HookResult.Continue;
@@ -335,9 +335,21 @@ public static class Panorama
             ? new TextPromptResult(TextPromptOutcome.Cancelled, string.Empty)
             : new TextPromptResult(TextPromptOutcome.Submitted, text));
 
-        // Swallow it. A kick reason or a ban note is not something to broadcast on the way in, and
-        // the player is answering a menu rather than talking to the server.
-        return HookResult.Handled;
+        // Stop, not Handled, and the difference is the whole bug.
+        //
+        // ExecuteCommandCallbacks (con_command_manager.cpp) treats them differently in the WILDCARD
+        // chain, which is where this runs:
+        //     if (hookResult >= Stop)    { if (mode == Pre) return Stop; }   // chain ends here
+        //     if (hookResult >= Handled) { result = hookResult; }            // loop continues
+        // Handled supercedes the engine's own broadcast, which is why this looked correct - but it
+        // leaves every later listener running. A chat-tag plugin (Ranks_Tag here) blocks the
+        // original and REPRINTS the line itself, so the answer went out anyway with a rank tag on
+        // it. Stop ends the chain, so nothing downstream ever sees the message.
+        //
+        // Scoped to exactly the message this library just consumed as a prompt answer: one player,
+        // one tick, already being swallowed deliberately. Gag and tag processing have no business
+        // running on a ban reason typed into a menu, so short-circuiting them here costs nothing.
+        return HookResult.Stop;
     }
 
     private static void Deliver(PendingPrompt pending, TextPromptResult result)
