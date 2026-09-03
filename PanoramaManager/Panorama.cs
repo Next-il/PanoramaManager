@@ -157,10 +157,11 @@ public static class Panorama
 
         // Diagnostic, and a second chance at the same message.
         //
-        // A named listener is one entry in a chain ordered by registration, and anything ahead of
-        // it returning Handled ends the chain. A null listener is registered separately, so it can
-        // be reached when the named one is not - and when neither is, that says the message never
-        // gets to this plugin at all, which is a different problem with a different fix.
+        // Not a fallback - the wildcard chain runs to completion BEFORE the named chain, inside the
+        // same dispatch, so this always fires and always fires first. It is worth keeping anyway:
+        // the named chain returns at the first listener answering Handled, so a "say" listener from
+        // another plugin registered ahead of ours means ours is never reached, and this is the only
+        // thing that still sees the message. The double fire is absorbed by _consumedSay.
         plugin.AddCommandListener(null, OnAnyCommand, HookMode.Pre);
 
         // One command that answers "is this working", because the alternative is reading five
@@ -198,11 +199,6 @@ public static class Panorama
     /// </summary>
     internal static void BeginPrompt(PanelHandle menu, CCSPlayerController player, TextPrompt prompt)
     {
-        // Paired with the line in OnSay. Together they say which half is broken: an arm with no
-        // matching say means the listener is not being reached; neither means it never armed.
-        _logger?.LogInformation("[Panorama] prompt armed for {Player} (slot {Slot})",
-            player.PlayerName, player.Slot);
-
         if (_plugin is null || player is not { IsValid: true })
             return;
 
@@ -216,6 +212,12 @@ public static class Panorama
             : null;
 
         Prompts[slot] = new PendingPrompt(slot, menu, prompt, timeout);
+
+        // After the guards, not before them: logged where an arm has actually happened. Paired with
+        // the line in OnSay. Together they say which half is broken - an arm with no matching say
+        // means the listener is not being reached; neither means it never armed.
+        _logger?.LogInformation("[Panorama] prompt armed for {Player} (slot {Slot})",
+            player.PlayerName, slot);
 
         if (!string.IsNullOrEmpty(prompt.Hint))
             player.PrintToChat(prompt.Hint);
@@ -244,11 +246,16 @@ public static class Panorama
     /// <summary>
     /// The last say this library consumed, as (slot, tick).
     ///
-    /// <para>Both listeners are registered - the named "say" one and the wildcard - and BOTH fire
-    /// for the same message. The first to run answers the prompt and removes it from
-    /// <see cref="Prompts"/>; the second then finds nothing pending and returns Continue, and a
-    /// Continue after a Handled is what puts the player's answer back into public chat. That is the
-    /// bug this exists to close: "your ban reason appeared in chat".</para>
+    /// <para>One typed line reaches this listener more than once. The wildcard chain and the named
+    /// chain both run inside a single ExecuteCommandCallbacks call, wildcard first, so registering
+    /// both is a guaranteed double fire rather than a fallback; and the engine dispatches a client
+    /// command through two hooked entry points, so the whole call can happen twice in the frame.
+    /// Without a memo the second pass finds a prompt again - the consumer re-arms from OnResult, as
+    /// the announce view does - and eats the same line a second time.</para>
+    ///
+    /// <para>Checked at the top of <see cref="OnSay"/>, before the pending lookup, so a repeat is
+    /// neither consumed nor let through: it returns Handled, which is what keeps the answer out of
+    /// public chat on whichever dispatch is the one that would have reached Host_Say.</para>
     ///
     /// <para>Keyed on the tick as well as the slot so it expires on its own. Two says from one
     /// player in the same tick is not a thing a human does, and if it ever happened the cost is one
@@ -286,14 +293,15 @@ public static class Panorama
         if (player is not { IsValid: true })
             return HookResult.Continue;
 
+        // Before the lookup, not after it. A consumer that re-arms from OnResult - which is the
+        // only way a view can stay armed while the admin retypes - puts a fresh prompt back in
+        // Prompts before the next listener in this same dispatch reads it, and a check placed on
+        // the miss branch would let that listener consume the line all over again.
+        if (_consumedSay == (player.Slot, Server.TickCount))
+            return HookResult.Handled;
+
         if (!Prompts.TryGetValue(player.Slot, out var pending))
-        {
-            // Already consumed this very message on the other listener. Handled again, so the
-            // second dispatch does not undo the first one's suppression.
-            return _consumedSay == (player.Slot, Server.TickCount)
-                ? HookResult.Handled
-                : HookResult.Continue;
-        }
+            return HookResult.Continue;
 
         _consumedSay = (player.Slot, Server.TickCount);
 

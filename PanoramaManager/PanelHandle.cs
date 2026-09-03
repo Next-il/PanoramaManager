@@ -52,6 +52,19 @@ public sealed class PanelHandle : IDisposable
     /// </summary>
     private readonly HashSet<int> _captureHeld = new();
 
+    /// <summary>
+    /// Slots whose scrub could not be written because there was no entity to write into, and
+    /// whether that scrub still owes the tracked classes a removal.
+    ///
+    /// <para>A scrub that cannot run is not a scrub that is not needed. Close drops the session
+    /// first and then hides the panel, so a scrub that bails leaves the exact state the user
+    /// reports as "stuck": the panel drawn, the reveal class still on, no session behind it, so the
+    /// close button is ignored and no later close retries - <c>Close</c> returns at its
+    /// <c>!_sessions.Remove</c> guard from then on. Remembering the slot is what makes it
+    /// retryable.</para>
+    /// </summary>
+    private readonly Dictionary<int, bool> _pendingScrub = new();
+
     /// <summary>Wraps <c>IPanelRenderer.SetInputCapture</c> so the capture state is recorded. The
     /// engine call and its return value are unchanged.</summary>
     private bool SetCapture(int slot, bool enabled)
@@ -246,6 +259,10 @@ public sealed class PanelHandle : IDisposable
         if (player is not { IsValid: true })
             return;
 
+        // Before anything is drawn: a scrub owed on this slot from an earlier close would otherwise
+        // land on top of the panel we are about to open and hide it again.
+        DrainPendingScrubs();
+
         var session = new PanelSession
         {
             Slot      = player.Slot,
@@ -255,6 +272,12 @@ public sealed class PanelHandle : IDisposable
         };
 
         _sessions[player.Slot] = session;
+
+        // This slot no longer owes a hide - it is being opened. The drain above runs BEFORE the
+        // session exists and before Render creates the entity, so on the first open of a layout on
+        // a new map it is guaranteed to have found nothing resolvable and left the entry queued.
+        // Dropping it here is what stops that entry firing later, against this very panel.
+        _pendingScrub.Remove(player.Slot);
 
         // Take off every per-viewer class this handle previously turned on for this slot, BEFORE the
         // first draw. Close deliberately leaves them so the exit animation still has the panel's
@@ -271,7 +294,11 @@ public sealed class PanelHandle : IDisposable
         // statement here, and it resolves by ADOPTING a live entity for this layout when there is
         // one. The classes come straight back, now untracked, and nothing in the process knows they
         // exist: no later scrub, close or reset can reach them for the rest of the map.
-        if (_renderer.IsEntityAlive() && _classesBySlot.Remove(player.Slot, out var stale))
+        // Resolvable rather than alive, for the reason the comment above gives: Render is the very
+        // next statement and it resolves by adopting, so an entity our index had merely forgotten is
+        // one we are about to write into anyway. IsEntityAlive here skipped the removals and then
+        // dropped the record on the next open, leaving classes nothing in the process can name.
+        if (_renderer.IsEntityResolvable() && _classesBySlot.Remove(player.Slot, out var stale))
         {
             foreach (var (panelId, className) in stale)
             {
@@ -541,7 +568,12 @@ public sealed class PanelHandle : IDisposable
 
         _disposed = true;
 
-        foreach (var slot in _sessions.Keys.ToList())
+        // Slots with no session are closed too, for their tracked classes. A normal close leaves
+        // those on so the exit animation keeps the panel's geometry, on the promise that the next
+        // Open scrubs them - a promise a disposed handle cannot keep, while the entity and its
+        // classes outlive it and the next handle for this layout adopts both. Close with no session
+        // is the no-op-plus-scrub path, so this costs a few refused writes.
+        foreach (var slot in _sessions.Keys.Concat(_classesBySlot.Keys).Distinct().ToList())
             Close(slot);
 
         Panorama.Forget(this);
@@ -645,17 +677,36 @@ public sealed class PanelHandle : IDisposable
     /// </summary>
     private void ScrubPanel(int slot, bool clearTrackedClasses)
     {
-        // No entity means nothing to scrub, and asking the renderer to write would SPAWN one -
-        // building a layout entity for the sole purpose of telling it to hide.
+        // Resolvable, not alive. IsEntityAlive only consults the cached index, and a world reset
+        // invalidates that index while the engine keeps the entity - so it reported "dead" for an
+        // entity that is right there and that every write path would have found, because they all
+        // resolve by ADOPTING. Bailing on that answer is the frozen-panel bug: the session is
+        // already gone, the reveal class stays on, and nothing retries, so the panel is drawn and
+        // deaf for the rest of the map. Resolvable adopts and still never spawns - building a
+        // layout entity for the sole purpose of telling it to hide would be a leak with no upside.
         //
         // Checked BEFORE the tracked set is taken, not after. Taking it first forgot every class
         // this handle had turned on for the slot and then returned without removing any of them,
         // which is what made a leftover permanent: this record is the only thing in the process that
-        // knows which classes were set, and a false IsEntityAlive means "our index does not resolve
-        // right now", not "the entity is gone" - the next Resolve adopts a live entity for this
-        // layout when there is one, wearing every class we just forgot.
-        if (!_renderer.IsEntityAlive())
+        // knows which classes were set.
+        if (!_renderer.IsEntityResolvable())
+        {
+            // Genuinely nothing in the world to write into. That is usually also nothing to undo -
+            // a fresh entity carries no per-player class state - but "usually" is what left panels
+            // stuck before, so the slot is queued instead of dropped. The tracked classes are
+            // untouched above, so the retry can still name them.
+            _pendingScrub[slot] = clearTrackedClasses
+                               || (_pendingScrub.TryGetValue(slot, out var owed) && owed);
+
+            // One retry next frame, which is when the common cause clears: a world reset drops the
+            // index and the replacement entity exists a frame later. If that fails too the slot
+            // stays queued and the next Open, spawn or world reset drains it - no timer, and no
+            // rescheduling from the drain itself, so this cannot spin.
+            Server.NextFrame(DrainPendingScrubs);
             return;
+        }
+
+        _pendingScrub.Remove(slot);
 
         // Taken only now that the removals at the bottom will actually be written.
         var tracked = clearTrackedClasses && _classesBySlot.Remove(slot, out var set) ? set : null;
@@ -685,6 +736,43 @@ public sealed class PanelHandle : IDisposable
             if (panelId == _contract.RootPanelId) continue;
 
             _renderer.SetClass(slot, panelId, className, false);
+        }
+    }
+
+    /// <summary>
+    /// Runs the scrubs that had no entity to write into when they were asked for.
+    ///
+    /// <para>Cheap to call from anywhere: the queue is empty in every normal life of a menu, and the
+    /// entity check is a dictionary lookup once the index resolves. It deliberately does NOT
+    /// reschedule itself - it returns while there is still nothing to write into, and is driven
+    /// instead by the moments that create an entity or prove one exists.</para>
+    /// </summary>
+    private void DrainPendingScrubs()
+    {
+        if (_pendingScrub.Count == 0)
+            return;
+
+        // Asked once here rather than once per slot, and it is also what makes the loop terminate:
+        // ScrubPanel can only re-queue a slot when this is false.
+        if (!_renderer.IsEntityResolvable())
+            return;
+
+        foreach (var (slot, clearTrackedClasses) in _pendingScrub.ToList())
+        {
+            // A slot that has a session does not owe a hide. The queue is keyed by slot with no
+            // identity, and entries outlive the close that made them: ResetSlot queues on every
+            // connect and disconnect, so on a fresh map - where no entity exists yet and even Adopt
+            // cannot succeed - every player who joins leaves one behind. Draining it later, against
+            // a panel somebody has since opened, blanks that panel while the session stays live:
+            // cursor held, IsOpenFor still true, and no consumer told anything happened. Worse, the
+            // entry may have been queued for the PREVIOUS occupant of the slot entirely.
+            if (_sessions.ContainsKey(slot))
+            {
+                _pendingScrub.Remove(slot);
+                continue;
+            }
+
+            ScrubPanel(slot, clearTrackedClasses);
         }
     }
 
@@ -909,6 +997,10 @@ public sealed class PanelHandle : IDisposable
         //
         // Still tell consumers to redraw. The entity survived, but that is not a promise the client
         // kept the panel it was drawing, and a redraw is cheap next to a blank card.
+        // Owed scrubs first: this is the one moment that knows whether the entity came back, and a
+        // scrub queued by the previous reset is for a slot nobody is going to close again.
+        DrainPendingScrubs();
+
         if (_renderer.IsEntityAlive())
         {
             foreach (var session in _sessions.Values.ToList())
@@ -978,10 +1070,14 @@ public sealed class PanelHandle : IDisposable
         {
             if (Utilities.GetPlayerFromSlot(slot) is not { IsValid: true } player)
             {
-                // Gone or not ready. Capture was already released in OnWorldReset; repeat it
-                // against the fresh entity, since the one it was set on no longer exists.
-                if (_contract.CaptureInput)
-                    SetCapture(slot, false);
+                // Close, not just a capture release. OnWorldReset took the dead branch on the
+                // strength of IsEntityAlive, which reads only the cached index - so when that answer
+                // was wrong (the entity was preserved, the index merely forgotten) the reveal class
+                // was never taken off anywhere: OnWorldReset does not scrub, and returning here left
+                // a panel drawn with its session already cleared and nothing that would ever retry.
+                // Close with no session is exactly the scrub-and-release path this needs, and it is
+                // a no-op when there was genuinely nothing there.
+                Close(slot);
                 continue;
             }
 
@@ -1134,6 +1230,10 @@ public sealed class PanelHandle : IDisposable
     {
         if (player is not { IsValid: true }) return;
 
+        // A spawn is the cheapest proof that the world is up and an entity can be resolved, which is
+        // what a scrub queued during a map change was waiting for.
+        DrainPendingScrubs();
+
         var open = _sessions.ContainsKey(player.Slot);
 
         // Spawning with no menu open means nothing should be holding the cursor. A capture that
@@ -1180,7 +1280,9 @@ public sealed class PanelHandle : IDisposable
         // this slot in cursor mode with no panel to close, and releasing one never taken is a no-op.
         // Guarded on the entity only so that a player joining a server where this menu has never
         // opened is not what spawns its layout entity - a fresh entity captures nobody's input.
-        if (_renderer.IsEntityAlive())
+        // Adoption satisfies that guard without spawning, and a capture held on an entity whose
+        // index we forgot is exactly the one nothing else will ever release.
+        if (_renderer.IsEntityResolvable())
             SetCapture(slot, false);
 
         // The slot is changing hands, so nothing here is worth preserving and everything left is
