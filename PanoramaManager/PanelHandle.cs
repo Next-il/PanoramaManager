@@ -1087,6 +1087,19 @@ public sealed class PanelHandle : IDisposable
                     continue;
                 }
 
+                // The library's own writes first. Restored asks the consumer to repaint its
+                // content, but the reveal class, title, rows and page class are ours and nobody
+                // else reissues them - so a consumer that dutifully redraws was writing into a root
+                // the client may still have hidden. Best-effort on purpose: unlike a first draw the
+                // panel is probably still on screen, so a failed write is worth a line in the log
+                // and nothing more.
+                if (!Render(session))
+                {
+                    _logger.LogWarning(
+                        "[Panorama] menu {MenuId} could not be redrawn for {Player} after a world "
+                        + "reset; leaving it open.", Id, player.PlayerName);
+                }
+
                 Raise(player, PanelAction.Restored, _contract.RootPanelId, null, session.Page, Array.Empty<string>());
             }
 
@@ -1279,6 +1292,23 @@ public sealed class PanelHandle : IDisposable
     }
 
     /// <summary>
+    /// The entity to force into this slot's transmit list, or null when this slot has nothing open
+    /// on this menu.
+    ///
+    /// <para>Not the mirror image of <see cref="EntityToHideFrom"/>: that one only declines to take
+    /// the entity away, which is no help when the engine never put it in the list. The layout entity
+    /// is logical and sits at the world origin, so a viewer whose PVS moves - dying and going in-eye
+    /// of another player, then respawning somewhere else - can lose it while their menu is open,
+    /// with every piece of server-side state still perfectly healthy. Anyone with a session gets it,
+    /// regardless of the contract: a menu the player asked for is not a spectator leak.</para>
+    ///
+    /// <para>Called once per player per tick, so it does no work beyond a dictionary lookup and
+    /// never spawns anything.</para>
+    /// </summary>
+    internal uint? EntityToShowTo(int slot)
+        => _sessions.ContainsKey(slot) ? _renderer.EntityIndexIfSpawned : null;
+
+    /// <summary>
     /// The entity to hide from this slot, or null when it should be sent as normal.
     ///
     /// <para>Called once per player per tick, so it does no work beyond a dictionary lookup and
@@ -1323,6 +1353,19 @@ public sealed class PanelHandle : IDisposable
             // the player has none of it.
             Panorama.ReleaseInputIfIdle(player.Slot);
             return;
+        }
+
+        // Redraw. A respawn moves the player's viewpoint, and with it the snapshot the layout
+        // entity may or may not be in - so a panel that was open across the death can come back to
+        // a client that has thrown it away, or never re-applied the per-slot state it was sent
+        // while it had no entity. This writes the library's own state again (reveal class, title,
+        // rows, page); consumers keep their own writes, which is why no Restored is raised here -
+        // some consumers close a panel on a Restored they hold no viewer for.
+        if (_sessions.TryGetValue(player.Slot, out var session) && !Render(session))
+        {
+            _logger.LogWarning(
+                "[Panorama] menu {MenuId} could not be redrawn for {Player} after a respawn.",
+                Id, player.PlayerName);
         }
 
         if (_contract.HideHud == HideHudFlags.None) return;

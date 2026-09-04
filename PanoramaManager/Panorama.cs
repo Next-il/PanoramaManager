@@ -705,10 +705,19 @@ public static class Panorama
     }
 
     /// <summary>
-    /// Drops each menu's entity from the transmit list for players who have nothing open on it.
+    /// Decides each menu's entity per player: sent to whoever has it open, dropped for whoever has
+    /// nothing open on it.
     ///
     /// <para>Runs every tick for every player, so it does the least possible: a slot lookup per
-    /// menu, and nothing at all when no menu opts in or none has spawned yet.</para>
+    /// menu, and nothing at all when no menu has spawned yet.</para>
+    ///
+    /// <para>The add is not redundant with the engine's own list. The layout entity is a logical
+    /// entity sitting at the world origin, so whether it lands in a given client's snapshot is the
+    /// engine's business, not ours - and a player whose viewpoint moves (dying and going in-eye of
+    /// somebody else, then respawning at a spawn point) can have it drop out from under an open
+    /// menu. The client then keeps drawing the last state it was told about until it tears the
+    /// entity down on its own, which is the "my menu vanished a few seconds after I respawned"
+    /// report. Anyone holding a session is told about the entity unconditionally.</para>
     /// </summary>
     private static void OnCheckTransmit(CCheckTransmitInfoList infoList)
     {
@@ -722,7 +731,11 @@ public static class Panorama
 
             foreach (var handle in Handles)
             {
-                if (handle.EntityToHideFrom(slot) is { } index)
+                // Show wins over hide, and the two are mutually exclusive anyway - both are keyed
+                // on the same session lookup, from opposite sides.
+                if (handle.EntityToShowTo(slot) is { } shown)
+                    info.TransmitEntities.Add((int) shown);
+                else if (handle.EntityToHideFrom(slot) is { } index)
                     info.TransmitEntities.Remove((int) index);
             }
         }
