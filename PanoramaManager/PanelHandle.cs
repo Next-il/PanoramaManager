@@ -286,6 +286,31 @@ public sealed class PanelHandle : IDisposable
         if (player is not { IsValid: true })
             return;
 
+        // Refused rather than drawn into a screen that cannot show it.
+        //
+        // The client resolves this entity's per-player state through the player it is OBSERVING,
+        // not through the local client, so a viewer in-eye of somebody else gets the panel drawn
+        // from the TARGET's slot - empty - while input capture comes from their own slot and works.
+        // The result is a cursor over nothing, with no close button to escape with, and a server
+        // side that looks perfect: css_panorama_diag reports a complete, correct render. See
+        // ObserverTargets for the evidence, and note this is NOT a transmission problem - forcing
+        // the entity into the viewer's transmit list was tried and changed nothing.
+        //
+        // Only for layouts that take the mouse. A read-only toast or bar that a spectating viewer
+        // cannot see costs them nothing and strands nobody, so those open exactly as before.
+        if (_contract.CaptureInput && ObserverTargets.ObservedSlot(player) is { } watchedSlot)
+        {
+            _logger.LogInformation(
+                "[Panorama] {Player} tried to open menu {MenuId} while watching slot {Watched}; "
+                + "refused - the client would draw it from that slot and show nothing.",
+                player.PlayerName, Id, watchedSlot);
+
+            if (_contract.SpectatingMessage is { Length: > 0 } message)
+                player.PrintToChat(message);
+
+            return;
+        }
+
         // Before anything is drawn: a scrub owed on this slot from an earlier close would otherwise
         // land on top of the panel we are about to open and hide it again.
         DrainPendingScrubs();
@@ -545,7 +570,8 @@ public sealed class PanelHandle : IDisposable
 
         foreach (var slot in slots)
         {
-            var name = Utilities.GetPlayerFromSlot(slot) is { IsValid: true } p ? p.PlayerName : "<gone>";
+            var viewer  = Utilities.GetPlayerFromSlot(slot);
+            var name    = viewer is { IsValid: true } ? viewer.PlayerName : "<gone>";
             var classes = _classesBySlot.TryGetValue(slot, out var set) && set.Count > 0
                 ? string.Join(" ", set.OrderBy(c => c.PanelId).ThenBy(c => c.ClassName)
                                       .Select(c => $"{c.PanelId}.{c.ClassName}"))
@@ -584,7 +610,15 @@ public sealed class PanelHandle : IDisposable
                         : _captureHeld.Contains(slot) ? "capture=HELD"
                         : "capture=off";
 
-            yield return $"slot {slot,-2} {name,-20} {state} {capture}";
+            // The one line that turns "the render is perfect but the player sees nothing" from a
+            // mystery into a fact. The client reads this entity's per-player state through the
+            // player being OBSERVED, so a viewer watching someone else is drawn from THAT slot -
+            // and every other field on this line will still look completely healthy.
+            var watching = ObserverTargets.ObservedSlot(viewer) is { } watched
+                ? $" WATCHING slot {watched} (client draws from that slot)"
+                : string.Empty;
+
+            yield return $"slot {slot,-2} {name,-20} {state} {capture}{watching}";
             yield return $"       classes: {classes}";
         }
     }

@@ -70,6 +70,23 @@ public sealed class LayoutContract
     public bool HideFromSpectators { get; init; } = true;
 
     /// <summary>
+    /// What to tell a player who tries to open this layout while watching another player, or null
+    /// to refuse silently. Only ever used by a layout that takes input (<see cref="CaptureInput"/>).
+    ///
+    /// <para><b>Why the open is refused at all.</b> The client resolves a custom_hud_layout's
+    /// per-player state through the player it is OBSERVING, so a viewer in-eye of somebody else has
+    /// this panel drawn from THEIR slot - which holds nothing - while input capture still comes
+    /// from the viewer's own. That is a cursor over an empty screen with no close button to escape
+    /// with, and it looks perfectly healthy server-side. Saying so is worse than showing the panel
+    /// and better than stranding them.</para>
+    ///
+    /// <para>Override it to localise, or set it to null for a panel that is opened for everybody at
+    /// once (an end-of-map vote) where one line per dead player is just chat spam.</para>
+    /// </summary>
+    public string? SpectatingMessage { get; init; } =
+        "You can't open this while you're watching another player - try again after you respawn.";
+
+    /// <summary>
     /// Whether every viewer sees the same text, so writes may use the global dialog-variable
     /// setter. Default false: text is per viewer.
     ///
