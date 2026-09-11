@@ -1,22 +1,23 @@
 <Project>
 
   <PropertyGroup>
-    <CounterStrikeSharpVersion>1.0.373</CounterStrikeSharpVersion>
+    <CounterStrikeSharpVersion>1.0.374</CounterStrikeSharpVersion>
   </PropertyGroup>
 
   <PropertyGroup>
-    <!-- CounterStrikeSharp 1.0.373 ships lib/net10.0 only. -->
+    <!-- CounterStrikeSharp 1.0.374 ships lib/net10.0 only. 374 is also the floor: it is the
+       release that added the CCSCustomHudLayout schema class, its setter extensions and the
+       OnCustomHudClicked listener, which is everything this library used to scan for by hand. -->
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>disable</ImplicitUsings>
     <LangVersion>14</LangVersion>
     <Nullable>enable</Nullable>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PlatformTarget>x64</PlatformTarget>
     <!-- Without these, output lands in a net10.0/ subfolder and no longer matches the
          plugins/<Name>/<Name>.dll layout CounterStrikeSharp requires. -->
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
-    <Version>0.3.0</Version>
+    <Version>0.4.0</Version>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <!-- Undocumented public members: the API surface is documented, internals are not. -->
     <NoWarn>$(NoWarn);CS1591</NoWarn>

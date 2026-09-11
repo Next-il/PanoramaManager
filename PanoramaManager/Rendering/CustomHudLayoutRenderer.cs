@@ -1,49 +1,62 @@
-using System;
 using System.Collections.Generic;
+using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
+using CounterStrikeSharp.API.Modules.Extensions;
 using PanoramaManager.Internal;
 using Microsoft.Extensions.Logging;
 
 namespace PanoramaManager.Rendering;
 
 /// <summary>
-/// Drives a <c>custom_hud_layout</c> entity through the engine's own per-player state setters.
+/// Drives a <c>custom_hud_layout</c> entity through CounterStrikeSharp's own
+/// <c>CCSCustomHudLayout</c> setters.
 ///
 /// <para>Everything is written through the <c>...ForPlayer</c> variants so two admins can have the
-/// same menu open on different pages. Those write into <c>m_vecPlayerLayoutStates[slot]</c> and
-/// silently no-op if that slot's state isn't allocated, which is also why every call here is
-/// best-effort rather than throwing.</para>
+/// same menu open on different pages. Those write into <c>m_vecPlayerLayoutStates[slot]</c>, which
+/// only exists for a connected player, so every call here is best-effort rather than throwing -
+/// see <see cref="Target"/>.</para>
 /// </summary>
 public sealed class CustomHudLayoutRenderer : IPanelRenderer
 {
-    private readonly LayoutContract    _contract;
-    private readonly PanelEntity        _entity;
-    private readonly CustomHudNatives  _natives;
-    private readonly ILogger           _logger;
+    private readonly LayoutContract _contract;
+    private readonly PanelEntity    _entity;
 
     public CustomHudLayoutRenderer(string layoutPath, LayoutContract contract, ILogger logger)
     {
         _contract = contract;
-        _logger   = logger;
         _entity   = new PanelEntity(layoutPath, logger);
-        _natives  = new CustomHudNatives(logger);
     }
 
     public int RowCapacity => _contract.RowCount;
 
     public uint? EntityIndexIfSpawned => _entity.IndexIfSpawned;
 
+    /// <summary>What this renderer is actually bound to right now.</summary>
+    public string DescribeState() => _entity.Describe();
+
     /// <summary>
-    /// What this renderer is actually bound to right now.
+    /// The entity plus the controller for <paramref name="slot"/>, or null if either is missing.
     ///
-    /// <para>The diagnostic used to build its own <c>CustomHudNatives</c> and describe that, which
-    /// answers a question nobody asked: the object it described had never rendered anything. This
-    /// reads the instance the menu draws through. The identity hash is printed because most of the
-    /// table is static - if two renderers ever disagree, the hashes are what shows it.</para>
+    /// <para>The setters are keyed on the controller, not the slot: the state a per-player write
+    /// lands in is <c>m_vecPlayerLayoutStates[controller index - 1]</c>. So a write for a slot with
+    /// nobody in it has no destination, and asking for one is an out-of-range element fetch rather
+    /// than a no-op - which is what <see cref="PanelEntity.HasStateFor"/> is guarding.</para>
+    ///
+    /// <para>This is the one behaviour the old hand-rolled path had that this does not: it computed
+    /// the state address from the raw slot and could therefore clear a departing player's state
+    /// after their controller was gone. Clearing on the way IN covers it -
+    /// <c>OnClientPutInServer</c> resets the slot - which the library already does, precisely
+    /// because a disconnect is not a reliable place to do it.</para>
     /// </summary>
-    public string DescribeState()
-        => $"{_entity.Describe()}  natives#{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(_natives):x4} "
-         + $"per-player text: {(_natives.CanWritePerPlayerText ? "available" : "UNAVAILABLE")}";
+    private (CCSCustomHudLayout Layout, CCSPlayerController Player)? Target(int slot)
+    {
+        if (_entity.Resolve() is not { } layout || !PanelEntity.HasStateFor(layout, slot))
+            return null;
+
+        return Utilities.GetPlayerFromSlot(slot) is { IsValid: true } player
+            ? (layout, player)
+            : null;
+    }
 
     /// <summary>
     /// Every dialog-variable write funnels through here so the global/per-player choice is made in
@@ -61,33 +74,18 @@ public sealed class CustomHudLayoutRenderer : IPanelRenderer
     /// <see cref="LayoutContract.SharedText"/>. Everything else fails the write instead, which the
     /// caller can see and report.</para>
     /// </summary>
-    private bool WriteVariable(IntPtr entity, int slot, string panelId, string name, string value)
+    private bool WriteVariable(CCSCustomHudLayout layout, CCSPlayerController player, string panelId, string name, string value)
     {
         if (_contract.SharedText || Panorama.UseGlobalDialogVariables)
-            return _natives.SetDialogVariableString(entity, panelId, name, value);
-
-        if (!_natives.CanWritePerPlayerText)
         {
-            WarnOncePerPlayerTextMissing();
-            return false;
+            layout.SetDialogVariableString(panelId, name, value);
+
+            return true;
         }
 
-        return _natives.SetDialogVariableStringForPlayer(entity, (uint) slot, panelId, name, value);
-    }
+        layout.SetDialogVariableStringForPlayer(player, panelId, name, value);
 
-    private bool _warnedPerPlayerText;
-
-    /// <summary>Said once, not once per write - a render is dozens of writes and this would bury
-    /// the log otherwise.</summary>
-    private void WarnOncePerPlayerTextMissing()
-    {
-        if (_warnedPerPlayerText) return;
-        _warnedPerPlayerText = true;
-
-        _logger.LogError(
-            "[Panorama] per-player text is unavailable, so this layout cannot render. Run "
-            + "css_panorama_diag: the intern/write signatures did not resolve, which usually means "
-            + "the gamedata needs updating after a CS2 patch.");
+        return true;
     }
 
     public void Invalidate() => _entity.Invalidate();
@@ -100,12 +98,12 @@ public sealed class CustomHudLayoutRenderer : IPanelRenderer
     /// <see cref="IPanelRenderer.IsEntityResolvable"/> for why this is not IsEntityAlive.</summary>
     public bool IsEntityResolvable() => _entity.ResolveWithoutSpawning() != null;
 
-    public bool OwnsEntity(IntPtr entity)
-        => entity != IntPtr.Zero && _entity.Resolve() is { } mine && mine.Handle == entity;
+    public bool OwnsEntity(System.IntPtr entity)
+        => entity != System.IntPtr.Zero && _entity.Resolve() is { } mine && mine.Handle == entity;
 
     public bool RenderRows(int slot, IReadOnlyList<MenuItem> rows)
     {
-        if (_entity.Resolve() is not { } entity)
+        if (Target(slot) is not ({ } layout, { } player))
             return false;
 
         // RowCount 0 means the layout has no rowN pool at all - every panel is addressed directly.
@@ -114,8 +112,6 @@ public sealed class CustomHudLayoutRenderer : IPanelRenderer
         if (_contract.RowCount <= 0)
             return true;
 
-        var handle = entity.Handle;
-
         for (var i = 0; i < _contract.RowCount; i++)
         {
             var panelId = _contract.RowPanelId(i);
@@ -123,18 +119,18 @@ public sealed class CustomHudLayoutRenderer : IPanelRenderer
             if (i >= rows.Count)
             {
                 // Collapse, don't just blank - an empty-but-visible row leaves a hole in the list.
-                _natives.SetHasClassForPlayer(handle, (uint) slot, panelId, _contract.HiddenClass, true);
+                layout.SetHasClassForPlayer(player, panelId, _contract.HiddenClass, true);
                 continue;
             }
 
             var row = rows[i];
 
-            WriteVariable(handle, slot, RootFor(panelId), _contract.RowTitleVar(i), row.Title);
+            WriteVariable(layout, player, RootFor(panelId), _contract.RowTitleVar(i), row.Title);
 
-            WriteVariable(handle, slot, RootFor(panelId), _contract.RowSubtitleVar(i), row.Subtitle ?? string.Empty);
+            WriteVariable(layout, player, RootFor(panelId), _contract.RowSubtitleVar(i), row.Subtitle ?? string.Empty);
 
-            _natives.SetHasClassForPlayer(handle, (uint) slot, panelId, _contract.HiddenClass, false);
-            _natives.SetHasClassForPlayer(handle, (uint) slot, panelId, _contract.DisabledClass, !row.Enabled);
+            layout.SetHasClassForPlayer(player, panelId, _contract.HiddenClass, false);
+            layout.SetHasClassForPlayer(player, panelId, _contract.DisabledClass, !row.Enabled);
         }
 
         return true;
@@ -142,35 +138,39 @@ public sealed class CustomHudLayoutRenderer : IPanelRenderer
 
     public bool SetVariable(int slot, string name, string value)
     {
-        if (_entity.Resolve() is not { } entity)
+        if (Target(slot) is not ({ } layout, { } player))
             return false;
 
-        return WriteVariable(entity.Handle, slot, _contract.RootPanelId, name, value);
+        return WriteVariable(layout, player, _contract.RootPanelId, name, value);
     }
 
     public bool SetClass(int slot, string panelId, string className, bool enabled)
     {
-        if (_entity.Resolve() is not { } entity)
+        if (Target(slot) is not ({ } layout, { } player))
             return false;
 
-        return _natives.SetHasClassForPlayer(entity.Handle, (uint) slot, panelId, className, enabled);
+        layout.SetHasClassForPlayer(player, panelId, className, enabled);
+
+        return true;
     }
 
     /// <summary>
     /// Required for a player's HUD to take mouse input - without it there is no cursor and Buttons
     /// cannot be clicked.
     ///
-    /// <para>The signature is byte-identical to the upstream ModSharp plugin's, which reports input
-    /// capture as confirmed working, so a failure here is not a stale pattern. In our first test no
-    /// cursor appeared, but the click receiver was also hooked on the wrong function at the time, so
-    /// that result is not clean. Retest now that the receiver is correct.</para>
+    /// <para>Read back rather than assumed. The setter is void, and this is the one piece of
+    /// per-player state the engine will also report, so "did the capture land" has a real answer
+    /// instead of an inference - and a capture stranded on a slot with no state used to print
+    /// capture=off in the diagnostic and look clean.</para>
     /// </summary>
     public bool SetInputCapture(int slot, bool enabled)
     {
-        if (_entity.Resolve() is not { } entity)
+        if (Target(slot) is not ({ } layout, { } player))
             return false;
 
-        return _natives.SetInputCaptureEnabled(entity.Handle, (uint) slot, enabled);
+        layout.SetInputCaptureEnabled(player, enabled);
+
+        return layout.IsInputCaptureEnabled(player) == enabled;
     }
 
     /// <summary>Panorama scopes dialog variables to the panel they're set on and children inherit

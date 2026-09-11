@@ -30,9 +30,8 @@ jobs:
 
       - name: Stage release layout
         run: |
-          mkdir -p out/lib out/gamedata out/plugins out/workshop/panorama
+          mkdir -p out/lib out/plugins out/workshop/panorama
           cp .build/plugins/AdminMenu/PanoramaManager.dll out/lib/
-          cp gamedata/panoramamanager.json                       out/gamedata/
           cp -r .build/plugins/AdminMenu                 out/plugins/
           cp -r .build/plugins/AdminMenuKit              out/plugins/
           cp -r .build/plugins/TextInput                 out/plugins/
@@ -45,7 +44,6 @@ jobs:
         run: |
           set -e
           test -f out/lib/PanoramaManager.dll
-          test -f out/gamedata/panoramamanager.json
           test -f out/workshop/panorama/styles/custom_game/hud_shared.css
 
           # Every layout an example asks for has to actually ship, or the plugin loads and points at

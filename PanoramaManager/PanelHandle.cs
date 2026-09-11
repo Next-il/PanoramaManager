@@ -389,14 +389,14 @@ public sealed class PanelHandle : IDisposable
 
         // A render that wrote nothing is the same failure as one that threw, and it is the more
         // common one: the renderer returns false rather than throwing on every path - no entity,
-        // an unresolved native, a refused per-player write - so dropping those return values made a
+        // a missing layout entity, a refused per-player write - so dropping those return values made a
         // dead render indistinguishable from a live one. The player then held a cursor with nothing
         // on screen and no close button to escape with, and reopening only repeated it.
         if (!drawn)
         {
             _logger.LogError(
                 "[Panorama] first draw of menu {MenuId} for {Player} wrote nothing - no entity, or "
-                + "the natives are unresolved. Closing it rather than leaving a cursor over an empty "
+                + "no state for that slot. Closing it rather than leaving a cursor over an empty "
                 + "screen; run css_panorama_diag.", Id, player.PlayerName);
 
             Close(session.Slot);
@@ -878,8 +878,8 @@ public sealed class PanelHandle : IDisposable
     /// Draws one viewer's page. Returns false if the draw did not reach the client.
     ///
     /// <para>Only the two writes every layout must have are judged: the reveal that makes the panel
-    /// visible, and the title. Both fail for the reasons that matter - no entity, unresolved
-    /// natives, per-player writes refused - and neither is optional in any layout the contract
+    /// visible, and the title. Both fail for the reasons that matter - no entity, no state for the
+    /// slot, per-player writes refused - and neither is optional in any layout the contract
     /// describes. The rest is left best-effort on purpose: a missing tab panel or a variable a
     /// layout does not declare is a layout detail, not a dead render, and failing the draw on one
     /// would close working menus.</para>

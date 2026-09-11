@@ -97,8 +97,9 @@ public sealed class LayoutContract
     /// blank when somebody else closes theirs. Only set this on a layout that genuinely shows
     /// everyone the same thing, such as a server-wide vote.</para>
     ///
-    /// <para>When this is false and the per-player natives are unavailable, writes fail rather than
-    /// falling back to global. Failing is recoverable; silently sharing state is not.</para>
+    /// <para>When this is false and a per-player write has nowhere to land - no entity, or no
+    /// state for that slot - the write fails rather than falling back to global. Failing is
+    /// recoverable; silently sharing state is not.</para>
     /// </summary>
     public bool SharedText { get; init; }
 

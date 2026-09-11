@@ -17,7 +17,7 @@ public interface IPanelRenderer
     uint? EntityIndexIfSpawned { get; }
 
     /// <summary>Draws <paramref name="rows"/> into the row pool for one player and blanks the rest.
-    /// Returns false if the underlying transport isn't available (bad signature, no entity).</summary>
+    /// Returns false if there was nowhere to write (no entity, or no state for that slot).</summary>
     bool RenderRows(int slot, IReadOnlyList<MenuItem> rows);
 
     /// <summary>Sets a free-form dialog variable for one player, e.g. a live timer.</summary>

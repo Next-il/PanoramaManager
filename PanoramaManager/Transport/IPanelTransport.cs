@@ -26,17 +26,18 @@ public sealed record RawInteraction(
 /// something outside this library's control:
 ///
 /// <list type="bullet">
-/// <item><see cref="ClickHookTransport"/> - the engine's own click message. Works with no scripting
-/// in the layout, which is the only thing allowed on the sanctioned path today. Unspoofable, since
-/// the controller pointer comes from the engine.</item>
+/// <item><see cref="ClickListenerTransport"/> - the engine's own click message, delivered by
+/// CounterStrikeSharp's <c>OnCustomHudClicked</c> listener. Works with no scripting in the layout,
+/// which is the only thing allowed on the sanctioned path today. Unspoofable, since the controller
+/// comes from the engine.</item>
 /// <item><see cref="ConsoleCommandTransport"/> - the layout's JS runs a console command. Only usable
 /// if scripting is ever permitted, and spoofable, so it carries a session token.</item>
 /// </list>
 /// </summary>
 public interface IPanelTransport
 {
-    /// <summary>True once the transport is live. A failed signature scan leaves this false and the
-    /// menu renders but never reports clicks.</summary>
+    /// <summary>True once the transport is live. False means the menu renders but never reports
+    /// clicks.</summary>
     bool IsInstalled { get; }
 
     event Action<RawInteraction>? OnInteraction;

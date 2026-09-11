@@ -9,10 +9,9 @@ get clicks back.
 ## The bridge
 
 A Panorama layout and a CounterStrikeSharp plugin have no idea the other exists. The layout is XML
-and CSS sitting on the client; the plugin is C# on the server. Between them is an entity whose
-setters have to be found by scanning `libserver.so`, whose strings have to be marshalled into
-`CUtlString`, whose per-player state lives at `m_vecPlayerLayoutStates[slot]` computed from raw
-offsets, and whose clicks arrive as a user message you have to detour.
+and CSS sitting on the client; the plugin is C# on the server. Between them is an entity addressed
+by panel id, class name and dialog variable, with a separate state per viewer and clicks arriving as
+a user message - and none of that is a menu, a page, a row or a callback.
 
 This is that bridge, behind typed C#:
 
@@ -22,8 +21,12 @@ menu.SetClassFor(player, "row0", "selected", true);        // toggles .selected
 menu.OnEvent += e => Kick(e.Item.Tag);                     // a click, resolved to your object
 ```
 
-No signatures, no marshalling, no offsets. `LayoutContract` is where you state what your panels are
-called, and everything after that is ids and strings.
+`LayoutContract` is where you state what your panels are called, and everything after that is ids
+and strings.
+
+The entity itself is driven through CounterStrikeSharp's `CCSCustomHudLayout` API, which is where
+this library's signature scanning, offset tables and click detour used to live. **CounterStrikeSharp
+1.0.374 or newer is required** - that is the release that added it.
 
 ## What you can build
 
@@ -74,8 +77,8 @@ close - including closes you did not trigger.
 cursor and stop them aiming.
 - **Cleanup that is easy to get wrong**: round restarts, disconnects, entity recycling, and panels
 left on screen when their entity is destroyed.
-- **Signatures in gamedata**, so a CS2 update that shifts them is a text edit on the server rather
-than a rebuild.
+- **No gamedata to maintain.** The engine side is CounterStrikeSharp's `CCSCustomHudLayout` API, so
+a CS2 update is a CounterStrikeSharp update rather than a re-derived signature.
 
 If it is a menu, also:
 
@@ -99,22 +102,21 @@ cannot take a keystroke.
 dotnet add package PanoramaManager
 ```
 
-The package brings `gamedata/panoramamanager.json` with it, and the DLL copies next to your plugin
-on build - which is what CounterStrikeSharp needs, since each plugin loads through a context that
-probes its own directory.
+The DLL copies next to your plugin on build - which is what CounterStrikeSharp needs, since each
+plugin loads through a context that probes its own directory. There is no gamedata file to install;
+the engine side is CounterStrikeSharp's, so keeping it current after a CS2 update means updating
+CounterStrikeSharp.
 
 Then, on the server:
 
-1. Copy `gamedata/panoramamanager.json` to `addons/counterstrikesharp/gamedata/`. It ships in the
-   package under `contentFiles/any/any/gamedata/`, and in every [release](../../releases).
-2. Add `workshop/panorama/` to a workshop addon, build it, and mount it. The paths must stay as
+1. Add `workshop/panorama/` to a workshop addon, build it, and mount it. The paths must stay as
    `panorama/layout/custom_game` and `panorama/styles/custom_game` - that is the search path CS2
    registers for custom HUD layouts.
 
 ### Just the examples
 
-Download the latest [release](../../releases), do steps 1 and 2 above, and copy the plugins you want
-from `plugins/` to `addons/counterstrikesharp/plugins/`.
+Download the latest [release](../../releases), do step 1 above, and copy the plugins you want from
+`plugins/` to `addons/counterstrikesharp/plugins/`.
 
 Either way, check it came up:
 
@@ -122,8 +124,7 @@ Either way, check it came up:
 css_panorama_diag
 ```
 
-A healthy start logs nothing. An error means the gamedata file is missing or a signature stopped
-resolving after a CS2 update, and it says what to do about it.
+A healthy start logs nothing.
 
 
 
@@ -132,7 +133,7 @@ resolving after a CS2 update, and it says what to do about it.
 
 | Command             |                                                                    |
 | ------------------- | ------------------------------------------------------------------ |
-| `css_panorama_diag` | gamedata source, which natives resolved, click channel, live menus |
+| `css_panorama_diag` | click channel, live menus, the entity and per-slot state behind each     |
 | `css_admin`         | example admin menu                                                 |
 | `css_adminkit`      | the same menu on a different skin                                  |
 | `css_textinput`     | example text prompt                                                |
@@ -149,7 +150,6 @@ resolving after a CS2 update, and it says what to do about it.
 Panorama.Init(this);                                  // once, in Load
 Panorama.Shutdown();                                  // in Unload
 bool Panorama.CanReceiveClicks { get; }
-bool Panorama.CanWritePerPlayerText { get; }
 bool Panorama.SetHideHud(CCSPlayerController player, HideHudFlags flags, bool hide);
 
 PanelHandle Panorama.Spawn(string layoutPath, LayoutContract? contract = null);
@@ -269,15 +269,18 @@ See [Writing the layouts](#writing-the-layouts) above for the tooling.
 
 ## Credits
 
-- [cs2-customhud](https://gitlab.com/cs2-server-plugins/cs2-customhud) - the engine signatures in
-`gamedata/panoramamanager.json` derive from its reverse engineering
-- [CounterStrikeSharp](https://github.com/roflmuffin/CounterStrikeSharp) - the framework this runs on
+- [CounterStrikeSharp](https://github.com/roflmuffin/CounterStrikeSharp) - the framework this runs
+on, and since 1.0.374 the `CCSCustomHudLayout` API this drives
+- [CS2Fixes](https://github.com/Source2ZE/CS2Fixes) - where that API's implementation came from
+- [cs2-customhud](https://gitlab.com/cs2-server-plugins/cs2-customhud) - the reverse engineering the
+signature-scanning versions of this library were built on
 
 
 
 ## Notes
 
-- **Linux tested.** Windows signatures are in the gamedata but have not been run.
+- **Linux tested.** Windows is untested, but there is no longer anything platform-specific here to
+get wrong - the per-platform signatures and `std::string` layouts are gone.
 - Four things the server genuinely cannot do, no matter the API: create panels, send a colour, send a
 coordinate, or take a keystroke. Everything here is strings into dialog variables and class
 toggles, which is why colours and widths are class palettes.
@@ -286,5 +289,6 @@ toggles, which is why colours and widths are class palettes.
 
 ## Need help?
 
-Open an [issue](../../issues). Include the output of `css_panorama_diag` - it says which natives
-resolved, which is the first thing worth knowing when a menu renders but does nothing.
+Open an [issue](../../issues). Include the output of `css_panorama_diag` - it says which entity each
+menu is bound to and what state each viewer's slot holds, which is the first thing worth knowing
+when a menu renders but does nothing.
