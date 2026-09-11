@@ -56,8 +56,7 @@ jobs:
             -p:Version=${{ steps.version.outputs.version }} \
             -o artifacts
 
-      # The package is useless without the gamedata file, and that is easy to break by editing
-      # the csproj. Cheaper to catch here than in someone's server log.
+      # Cheaper to catch a mispacked package here than in someone's server log.
       - name: Verify the package
         run: |
           set -e
@@ -65,7 +64,6 @@ jobs:
           test -f "$nupkg"
           test -f "artifacts/PanoramaManager.${{ steps.version.outputs.version }}.snupkg"
           unzip -l "$nupkg" | grep -q 'lib/net10.0/PanoramaManager.dll'
-          unzip -l "$nupkg" | grep -q 'contentFiles/any/any/gamedata/panoramamanager.json'
           unzip -l "$nupkg" | grep -q 'README.md'
           unzip -l "$nupkg"
 

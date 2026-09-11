@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using System.Collections.Generic;
 using System.Linq;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
@@ -49,18 +50,40 @@ internal sealed class PanelEntity
     internal bool IsAlive() => ResolveCached() != null;
 
     /// <summary>
+    /// Is <paramref name="layout"/> the entity for OUR layout path?
+    ///
+    /// <para><c>m_strLayout</c> is the entity's own record of the layout keyvalue it was spawned
+    /// with, reachable now that CounterStrikeSharp ships a schema class for
+    /// <c>CCSCustomHudLayout</c>. That makes this true for any matching entity in the world -
+    /// including one orphaned by a plugin reload, which the process-wide index map this replaced
+    /// could never recognise, because only the load context that spawned an entity had it on
+    /// record.</para>
+    /// </summary>
+    private bool IsOurs(CCSCustomHudLayout layout)
+    {
+        try
+        {
+            return layout.StrLayout == _layoutPath;
+        }
+        catch
+        {
+            return false; // Schema unavailable - treat it as somebody else's.
+        }
+    }
+
+    /// <summary>
     /// The cached entity if it is still ours, else null. Never spawns.
     ///
     /// <para>The designer-name check is not redundant with IsValid: entity indices are recycled, so
     /// a dead slot can come back valid while holding something else entirely - at which point we
     /// would be writing dialog variables into a stranger's entity.</para>
     /// </summary>
-    private CBaseEntity? ResolveCached()
+    private CCSCustomHudLayout? ResolveCached()
     {
         if (_index is not { } index) return null;
 
-        var existing = Utilities.GetEntityFromIndex<CBaseEntity>((int) index);
-        if (existing is { IsValid: true } && existing.DesignerName == ClassName)
+        var existing = Utilities.GetEntityFromIndex<CCSCustomHudLayout>((int) index);
+        if (existing is { IsValid: true } && existing.DesignerName == ClassName && IsOurs(existing))
             return existing;
 
         _index = null;
@@ -92,34 +115,23 @@ internal sealed class PanelEntity
     /// <para>The handle reports the one index it happens to hold, which reads as healthy while the
     /// client draws a different entity nobody writes into any more - "the library says closed, the
     /// panel is still up" with no other symptom. A plugin reload is the way in: custom_hud_layout is
-    /// preserved, Dispose never kills it, and the new load context's registry cannot recognise the
-    /// old one, so Adopt misses it and Create spawns a second. Diagnostic only, and only asked by
-    /// css_panorama_diag - it walks the entity list.</para>
+    /// preserved and Dispose never kills it, so the previous load leaves its entity standing.
+    /// Counted off m_strLayout, so a reload orphan is included - the index map this replaced could
+    /// not see one. Diagnostic only, and only asked by css_panorama_diag - it walks the entity list.</para>
     /// </summary>
     private string DescribeDuplicates()
     {
-        var live = Utilities.FindAllEntitiesByDesignerName<CBaseEntity>(ClassName)
-                            .Where(e => e.IsValid)
-                            .ToList();
+        var live = All().ToList();
+        var ours = live.Count(IsOurs);
 
-        var owned = live.Count(e => PanelRegistry.IsOwnedLayout(e.Index, _layoutPath));
-
-        // Both numbers, because the owned count alone cannot see the duplicate this method was
-        // written for. PanelRegistry is per load context and only Create writes to it, so the
-        // orphan a reload leaves behind is in nobody's registry: owned reads 1 and the line stays
-        // silent on exactly the failure it exists to catch. The world total is the honest signal -
-        // compare it against the number of distinct layouts the server actually uses.
-        return owned > 1
-            ? $"  DUPLICATE: {owned} entities for this layout ({live.Count} {ClassName} in world)"
-            : $"  ({live.Count} {ClassName} in world, {owned} owned here)";
+        return ours > 1
+            ? $"  DUPLICATE: {ours} entities for this layout ({live.Count} {ClassName} in world)"
+            : $"  ({live.Count} {ClassName} in world, {ours} for this layout)";
     }
 
     /// <summary>Resolves the live entity, spawning it on first use or after a world reset.
     /// Returns null if the entity could not be created.</summary>
-    internal CBaseEntity? Resolve()
-    {
-        return ResolveWithoutSpawning() ?? Create();
-    }
+    internal CCSCustomHudLayout? Resolve() => ResolveWithoutSpawning() ?? Create();
 
     /// <summary>
     /// The live entity for this layout if there is one, without creating anything.
@@ -134,34 +146,32 @@ internal sealed class PanelEntity
     /// hide. Adoption is the middle ground - one entity walk, and it finds anything this process
     /// could have written into.</para>
     /// </summary>
-    internal CBaseEntity? ResolveWithoutSpawning() => ResolveCached() ?? Adopt();
+    internal CCSCustomHudLayout? ResolveWithoutSpawning() => ResolveCached() ?? Adopt();
 
     /// <summary>
     /// Takes over an entity that is already in the world for this layout, or null if there is none.
     ///
-    /// <para>Adopting rather than stacking duplicates. DesignerName is the only thing we can match
-    /// on; the layout keyvalue interns into m_strLayout and isn't reachable without a schema class
-    /// for CCSCustomHudLayout. Filter on the layout, don't check it afterwards. Taking the first
-    /// entity of any kind and then asking whether it happens to be ours means that with several
-    /// menus live - each one its own entity, on its own layout - we look at exactly one candidate
-    /// and spawn a duplicate whenever it isn't the right one.</para>
+    /// <para>Filter on the layout, do not check it afterwards. Taking the first entity of any kind
+    /// and then asking whether it happens to be ours means that with several menus live - each one
+    /// its own entity, on its own layout - we look at exactly one candidate and spawn a duplicate
+    /// whenever it is not the right one.</para>
     /// </summary>
-    private CBaseEntity? Adopt()
+    private CCSCustomHudLayout? Adopt()
     {
-        var adopted = Utilities.FindAllEntitiesByDesignerName<CBaseEntity>(ClassName)
-            .FirstOrDefault(e => e.IsValid && PanelRegistry.IsOwnedLayout(e.Index, _layoutPath));
-
-        if (adopted is not { IsValid: true })
+        if (All().FirstOrDefault(IsOurs) is not { } adopted)
             return null;
 
         _index = adopted.Index;
         return adopted;
     }
 
-    private CBaseEntity? Create()
+    private static IEnumerable<CCSCustomHudLayout> All()
+        => Utilities.FindAllEntitiesByDesignerName<CCSCustomHudLayout>(ClassName).Where(e => e.IsValid);
+
+    private CCSCustomHudLayout? Create()
     {
         // Raw factory rather than Utilities.CreateEntityByName: an unknown classname comes back as
-        // a null pointer here, where the wrapper would hand back a CBaseEntity over address 0 whose
+        // a null pointer here, where the wrapper would hand back an entity over address 0 whose
         // IsValid dereferences 0x10.
         var pointer = VirtualFunctions.UTIL_CreateEntityByName(ClassName, -1);
         if (pointer == IntPtr.Zero)
@@ -170,13 +180,13 @@ internal sealed class PanelEntity
             return null;
         }
 
-        var entity = new CBaseEntity(pointer);
+        var entity = new CCSCustomHudLayout(pointer);
 
         // The layout MUST be set as a spawn keyvalue, not written to m_strLayout afterwards.
         // The field write networks fine and reads back correctly, so it looks like it worked, but
         // the client never loads the layout and you get "[custom_hud] Failed to load layout" with
         // no violation named - which then reads like an XML problem and sends you rewriting a
-        // layout that was never at fault. Do not "simplify" this into a schema write.
+        // layout that was never at fault. Do not "simplify" this into a StrLayout write.
         using (var kv = new CEntityKeyValues())
         {
             kv.SetVector("origin", 0f, 0f, 0f); // HUD manager entity, position is irrelevant.
@@ -192,7 +202,6 @@ internal sealed class PanelEntity
         }
 
         _index = entity.Index;
-        PanelRegistry.RegisterLayout(entity.Index, _layoutPath);
 
         _logger.LogDebug(
             "[Panorama] Spawned {ClassName} index={Index} layout='{Layout}'", ClassName, entity.Index, _layoutPath);
@@ -200,14 +209,36 @@ internal sealed class PanelEntity
         return entity;
     }
 
+    /// <summary>
+    /// Does <c>m_vecPlayerLayoutStates</c> have a state for this slot?
+    ///
+    /// <para>A guard, not a diagnostic. Every per-player setter resolves the slot's state by
+    /// indexing that vector, and a slot past the end is an out-of-range element fetch.</para>
+    ///
+    /// <para>It is also the honest answer to "did that write land". The setters are void and a slot
+    /// with no state silently receives nothing, so reporting "we called it" as "it worked" is what
+    /// left a panel capturing input at opacity 0 with no way to close it.</para>
+    /// </summary>
+    internal static bool HasStateFor(CCSCustomHudLayout layout, int slot)
+    {
+        if (slot < 0)
+            return false;
+
+        try
+        {
+            return slot < layout.PlayerLayoutStates.Count;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     /// <summary>Kills every <c>custom_hud_layout</c> in the world. Collects indices first -
     /// FindAllEntitiesByDesignerName is lazy and killing mid-enumeration invalidates its cursor.</summary>
     internal static int DespawnAll()
     {
-        var indices = Utilities.FindAllEntitiesByDesignerName<CBaseEntity>(ClassName)
-            .Where(e => e.IsValid)
-            .Select(e => e.Index)
-            .ToList();
+        var indices = All().Select(e => e.Index).ToList();
 
         var removed = 0;
         foreach (var index in indices)
@@ -218,8 +249,6 @@ internal sealed class PanelEntity
             entity.AcceptInput("Kill");
             removed++;
         }
-
-        PanelRegistry.ClearLayouts();
 
         return removed;
     }

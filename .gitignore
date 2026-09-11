@@ -15,3 +15,6 @@ previews/
 .vs/
 .vscode/
 workshop/previews/
+
+# coding-workflow lane marker, local only
+.claude/.coding-workflow-lane

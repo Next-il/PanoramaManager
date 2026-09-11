@@ -71,11 +71,9 @@ public sealed class AdminMenuPlugin : BasePlugin
         // Bots are included deliberately: they are the only other bodies on a test server, and an
         // admin menu that cannot target a bot is useless for kick/slay testing.
         //
-        // NOTE: the "(You)" marker is per-viewer text, so it is only correct while a single admin
-        // has the menu open. Panorama.UseGlobalDialogVariables is on by default because the
-        // per-player dialog-variable signature is broken on this build, which makes every viewer
-        // share one set of strings - the last admin to open it decides whose row says "(You)".
-        // That resolves itself the moment the signature is fixed and the flag goes false.
+        // The "(You)" marker is per-viewer text, which is the default - each admin sees their own
+        // row marked. Turning on Panorama.UseGlobalDialogVariables would make every viewer share
+        // one set of strings, and then the last admin to open it decides whose row says "(You)".
         _menu.SetItems(Utilities.GetPlayers()
             .Where(p => p is { IsValid: true, IsHLTV: false })
             .Select(p => new MenuItem(

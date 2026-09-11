@@ -49,56 +49,45 @@ public static class Panorama
     public static bool IsInitialised => _plugin is not null;
 
     /// <summary>
-    /// Write dialog variables through the engine's <b>global</b> setter rather than the per-player
-    /// path. Defaults to <b>false</b>: per-player text works, it just does not go through the
-    /// engine's <c>SetDialogVariableStringForPlayer</c> entry point, which never stores the value.
-    /// It interns the names and writes the slot's state directly instead - see
-    /// <c>CustomHudNatives.SetDialogVariableStringForPlayer</c>.
+    /// Write dialog variables into the layout's <b>global</b> state rather than each viewer's own.
+    /// Defaults to <b>false</b>, which is what you want.
     ///
-    /// <para>Set this to <b>true</b> as a safety valve: if the per-player write misbehaves after a
-    /// CS2 update shifts the state offsets, global writes still work and the menu still renders.</para>
+    /// <para>A safety valve, and the same one <see cref="LayoutContract.SharedText"/> opts into per
+    /// layout: if a CS2 update ever breaks the per-player state, global writes are the simpler path
+    /// and the menu still renders.</para>
     ///
     /// <para><b>What this costs.</b> Dialog variables become shared: every viewer of a given menu
-    /// sees the same title, row text and footer. Class toggles stay per-player (that signature is
-    /// good), so row <i>visibility</i> is still per viewer while row <i>text</i> is not. With one
-    /// viewer this is invisible; with two admins browsing at once, the second one's text wins.</para>
-    ///
-    /// <para>Set to false once <c>SetDialogVariableStringForPlayer</c> has a correct signature, and
-    /// per-viewer text comes back with no other change.</para>
+    /// sees the same title, row text and footer. Class toggles stay per-player, so row
+    /// <i>visibility</i> is still per viewer while row <i>text</i> is not. With one viewer this is
+    /// invisible; with two admins browsing at once, the second one's text wins.</para>
     /// </summary>
     public static bool UseGlobalDialogVariables { get; set; }
 
     /// <summary>
     /// True if clicks can actually reach the server. False means menus still render but nothing
-    /// comes back - check your logs for a signature-resolution warning. Worth surfacing in your own
-    /// plugin's startup output so a broken build is obvious.
+    /// comes back. Worth surfacing in your own plugin's startup output so a broken build is obvious.
     /// </summary>
     public static bool CanReceiveClicks => _transport?.IsInstalled == true;
 
     /// <summary>
-    /// True if per-viewer dialog variables are available. False means every viewer of a menu shares
-    /// one set of strings - see <see cref="UseGlobalDialogVariables"/>.
+    /// True if per-viewer dialog variables are available.
     ///
-    /// <para>Asked of the natives on every read rather than snapshotted at <see cref="Init"/>. The
-    /// answer is not fixed at load: the stride check can disable the per-player path, and a consumer
-    /// that cached this once printed "available" for the rest of the map while every text write was
-    /// being refused.</para>
+    /// <para>Always true now, and kept so consumers that report it do not have to change. It used
+    /// to be a live question: the per-player write was a hand-computed address into
+    /// <c>m_vecPlayerLayoutStates[slot]</c>, and a CS2 update that moved the state stride disabled
+    /// it. CounterStrikeSharp resolves that state through the schema by name, so there is no stride
+    /// left to go stale.</para>
     /// </summary>
-    public static bool CanWritePerPlayerText
-        => _logger is { } log && (_natives ??= new CustomHudNatives(log)).CanWritePerPlayerText;
-
-    /// <summary>Kept for the property above so the check is a field read rather than an allocation
-    /// per call - the natives themselves are static, this instance is just the accessor.</summary>
-    private static CustomHudNatives? _natives;
+    public static bool CanWritePerPlayerText => true;
 
     /// <summary>
     /// Wires the library to your plugin. Call once from <c>Load</c>.
     /// </summary>
     /// <param name="plugin">Your plugin instance.</param>
     /// <param name="transport">
-    /// Override the click channel. Defaults to <see cref="ClickHookTransport"/>, which is the only
-    /// one that works without layout scripting. Pass a <see cref="ConsoleCommandTransport"/> if you
-    /// are on a build where layouts may run scripts.
+    /// Override the click channel. Defaults to <see cref="ClickListenerTransport"/>, which is the
+    /// only one that works without layout scripting. Pass a <see cref="ConsoleCommandTransport"/>
+    /// if you are on a build where layouts may run scripts.
     /// </param>
     public static void Init(BasePlugin plugin, IPanelTransport? transport = null)
     {
@@ -110,14 +99,7 @@ public static class Panorama
         _plugin = plugin;
         _logger = plugin.Logger;
 
-        // Force signature resolution now rather than on the first menu open, so a broken gamedata
-        // file is reported at load instead of the first time somebody opens a menu. This is silent
-        // unless something is actually wrong; `css_panorama_diag` prints the full table on demand.
-        // The result is deliberately not stored - CanWritePerPlayerText re-asks, see the property.
-        _natives = new CustomHudNatives(_logger);
-        _ = _natives.CanWritePerPlayerText;
-
-        _transport = transport ?? new ClickHookTransport(_logger);
+        _transport = transport ?? new ClickListenerTransport(plugin, _logger);
         _transport.OnInteraction += Dispatch;
         _transport.Install();
 
@@ -184,8 +166,8 @@ public static class Panorama
         if (!_transport.IsInstalled)
         {
             _logger.LogWarning(
-                "[Panorama] no click channel - menus will render but won't respond. Expected on "
-                + "Windows servers; on Linux, run css_panorama_diag.");
+                "[Panorama] no click channel - menus will render but won't respond. Run "
+                + "css_panorama_diag.");
         }
     }
 
@@ -368,31 +350,20 @@ public static class Panorama
     /// <summary>
     /// Prints everything needed to tell a broken install from a broken layout.
     ///
-    /// <para>The three failures this library has actually had all looked identical from the outside
-    /// - a menu that renders but does nothing. They are told apart by which native resolved, whether
-    /// the click transport installed, and whether the schema agrees with the hardcoded offsets. All
-    /// of that is printed once at startup and then gone, so this reprints it on demand.</para>
+    /// <para>The failures this library has actually had all looked identical from the outside - a
+    /// menu that renders but does nothing. What tells them apart is which entity each handle is
+    /// bound to, whether the click channel is live, and what per-slot state is set. Signatures and
+    /// offsets used to be on this list; CounterStrikeSharp resolves both by name now, so a CS2
+    /// update no longer has a way to half-break the library.</para>
     /// </summary>
     [RequiresPermissions("@css/generic")]
     private static void Diagnose(CCSPlayerController? player, CommandInfo command)
     {
-        // The instance Init built and every CanWritePerPlayerText call since has gone through -
-        // NOT a fresh one. A new CustomHudNatives describes an object that has never rendered
-        // anything, and worse, it reports its own untouched fields: Resolve short-circuits on a
-        // static flag, so the second instance never runs the stride check and prints "not checked"
-        // on a server where the stride was checked and confirmed at load. A diagnostic that
-        // disagrees with the code it is diagnosing is worse than no diagnostic.
-        var natives = _natives ??= new CustomHudNatives(_logger!);
-
         // Every plugin referencing the library has its own copy of these statics and its own
         // registration of this command, so all of them answer. That is worth seeing - their state
         // genuinely differs - but only if each block says whose it is.
         var owner = _plugin?.ModuleName ?? "?";
 
-        foreach (var line in natives.Describe())
-            command.ReplyToCommand($"[Panorama/{owner}] {line}");
-
-        command.ReplyToCommand($"[Panorama/{owner}] per-player text: {(natives.CanWritePerPlayerText ? "available" : "UNAVAILABLE - text will be shared")}");
         command.ReplyToCommand($"[Panorama/{owner}] click channel:   {(CanReceiveClicks ? "installed" : "NOT INSTALLED - clicks will not arrive")}");
         command.ReplyToCommand($"[Panorama/{owner}] live menus:      {Handles.Count}");
 
@@ -400,10 +371,9 @@ public static class Panorama
         {
             command.ReplyToCommand($"[Panorama/{owner}]   {handle.Id} {handle.LayoutPath} ({handle.OpenCount} viewer(s))");
 
-            // The renderer's OWN view, not the block above. Most of the native table is static and
-            // the two normally agree - but "normally agree" is an assumption, and this is where a
-            // handle whose entity died or whose renderer sees a different table becomes visible
-            // instead of being averaged away into one summary line.
+            // Which entity this handle is actually bound to - where a handle whose entity died,
+            // or which is writing into a duplicate nobody is looking at, becomes visible instead
+            // of being averaged away into one summary line.
             command.ReplyToCommand($"[Panorama/{owner}]     {handle.DescribeRenderer()}");
 
             // Per-slot, because the failures that reach a player are per-slot: a class left on with
@@ -412,9 +382,6 @@ public static class Panorama
             foreach (var line in handle.DescribeSlots())
                 command.ReplyToCommand($"[Panorama/{owner}]     {line}");
         }
-
-        SchemaProbe.Report(_logger!);
-        command.ReplyToCommand($"[Panorama/{owner}] schema offsets written to the server log.");
     }
 
     /// <summary>
@@ -465,9 +432,8 @@ public static class Panorama
             _transport = null;
         }
 
-        _plugin  = null;
-        _logger  = null;
-        _natives = null;
+        _plugin = null;
+        _logger = null;
     }
 
     /// <summary>
@@ -622,13 +588,6 @@ public static class Panorama
 
     private static void OnMapStart(string mapName)
     {
-        // Entity indices from the previous map mean nothing on this one, and the registry is what
-        // Spawn consults before adopting an entity instead of creating one. Left standing, a
-        // recycled index can match an entry from the old map and hand a handle a custom_hud_layout
-        // belonging to another layout entirely - which then quietly receives every write meant for
-        // ours. Cleared before any handle resolves anything on the new map.
-        PanelRegistry.ClearLayouts();
-
         WorldReset();
     }
 
