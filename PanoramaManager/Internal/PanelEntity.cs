@@ -18,10 +18,25 @@ internal sealed class PanelEntity
 {
     internal const string ClassName = "custom_hud_layout";
 
+    /// <summary>Above any conceivable server. A count past this is a misread, not a big server.</summary>
+    private const int MaxPlausibleSlots = 128;
+
     private readonly string  _layoutPath;
     private readonly ILogger _logger;
 
     private uint? _index;
+
+    /// <summary>True once this instance has spawned the entity itself, as opposed to adopting one
+    /// that was already in the world. Only used to decide whether an adoption is worth a word.</summary>
+    private bool _spawnedHere;
+
+    /// <summary>One warning per instance - adoption is routine, the first one is the interesting
+    /// one, and repeating it every resolve would bury it.</summary>
+    private bool _warnedForeignAdoption;
+
+    /// <summary>Set when the layout path did not read back off an entity we spawned ourselves.
+    /// Identity then falls back to the index we spawned - see <see cref="Create"/>.</summary>
+    private bool _identityUnreadable;
 
     internal PanelEntity(string layoutPath, ILogger logger)
     {
@@ -83,7 +98,8 @@ internal sealed class PanelEntity
         if (_index is not { } index) return null;
 
         var existing = Utilities.GetEntityFromIndex<CCSCustomHudLayout>((int) index);
-        if (existing is { IsValid: true } && existing.DesignerName == ClassName && IsOurs(existing))
+        if (existing is { IsValid: true } && existing.DesignerName == ClassName
+                                         && (_identityUnreadable || IsOurs(existing)))
             return existing;
 
         _index = null;
@@ -161,6 +177,24 @@ internal sealed class PanelEntity
         if (All().FirstOrDefault(IsOurs) is not { } adopted)
             return null;
 
+        // Entities are shared per layout path across load contexts now that identity is read off
+        // m_strLayout instead of a per-context index map. Adopting one this plugin never spawned is
+        // the intended fix for a reload orphan - and it is also the only visible sign that a SECOND
+        // plugin is driving the same layout. Both would write the same per-player state, and both
+        // decide independently, in their own CheckTransmit, whether the shared entity reaches a
+        // viewer, so one plugin's hide cancels the other's show. Symptom with no line here: an open
+        // menu silently stops being drawn while every piece of server-side state reads healthy.
+        if (!_spawnedHere && !_warnedForeignAdoption)
+        {
+            _warnedForeignAdoption = true;
+
+            _logger.LogWarning(
+                "[Panorama] adopted {ClassName} idx {Index} for layout '{Layout}', which this menu did "
+                + "not spawn - a reload orphan, a second menu on the same layout, or another plugin "
+                + "driving it.",
+                ClassName, adopted.Index, _layoutPath);
+        }
+
         _index = adopted.Index;
         return adopted;
     }
@@ -201,7 +235,25 @@ internal sealed class PanelEntity
             return null;
         }
 
-        _index = entity.Index;
+        _spawnedHere = true;
+        _index       = entity.Index;
+
+        // Read the path back off the entity we just spawned. Identity is a string compare against
+        // m_strLayout now and EVERYTHING hangs off it - resolve, adopt, IsAlive, the duplicate
+        // count. If the engine ever stores a normalised form of the path, that compare is false
+        // forever: ResolveCached clears, Adopt misses, and every single write spawns another entity,
+        // silently, because a spawn is only a debug line. Falling back to the index we spawned turns
+        // an unbounded entity flood into one logged line.
+        if (!_identityUnreadable && !IsOurs(entity))
+        {
+            _identityUnreadable = true;
+
+            _logger.LogError(
+                "[Panorama] {ClassName} idx {Index} spawned with layout '{Layout}' does not read that "
+                + "path back from m_strLayout - using the spawned index for identity instead. "
+                + "Adopting an orphaned entity for this layout will not work until this is fixed.",
+                ClassName, entity.Index, _layoutPath);
+        }
 
         _logger.LogDebug(
             "[Panorama] Spawned {ClassName} index={Index} layout='{Layout}'", ClassName, entity.Index, _layoutPath);
@@ -226,7 +278,15 @@ internal sealed class PanelEntity
 
         try
         {
-            return slot < layout.PlayerLayoutStates.Count;
+            var count = layout.PlayerLayoutStates.Count;
+
+            // A count that cannot be right is refused rather than trusted. The setter resolves the
+            // state by indexing straight into this vector and bounds-checks nothing of its own, so a
+            // misread count turned into "yes" is an out-of-range element fetch on a live server.
+            if (count <= 0 || count > MaxPlausibleSlots)
+                return false;
+
+            return slot < count;
         }
         catch
         {

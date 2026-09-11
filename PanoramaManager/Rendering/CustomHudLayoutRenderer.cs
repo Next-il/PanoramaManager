@@ -74,19 +74,25 @@ public sealed class CustomHudLayoutRenderer : IPanelRenderer
     /// <see cref="LayoutContract.SharedText"/>. Everything else fails the write instead, which the
     /// caller can see and report.</para>
     /// </summary>
-    private bool WriteVariable(CCSCustomHudLayout layout, CCSPlayerController player, string panelId, string name, string value)
+    private bool WriteVariable(CCSCustomHudLayout layout, CCSPlayerController? player, string panelId, string name, string value)
     {
-        if (_contract.SharedText || Panorama.UseGlobalDialogVariables)
+        if (TextIsShared)
         {
             layout.SetDialogVariableString(panelId, name, value);
 
             return true;
         }
 
+        if (player is null)
+            return false;
+
         layout.SetDialogVariableStringForPlayer(player, panelId, name, value);
 
         return true;
     }
+
+    /// <summary>Is this layout's text written once for everyone rather than per viewer?</summary>
+    private bool TextIsShared => _contract.SharedText || Panorama.UseGlobalDialogVariables;
 
     public void Invalidate() => _entity.Invalidate();
 
@@ -138,6 +144,15 @@ public sealed class CustomHudLayoutRenderer : IPanelRenderer
 
     public bool SetVariable(int slot, string name, string value)
     {
+        // Shared text lands in the entity's global state, which exists whether or not this slot has
+        // a per-player state of its own. Going through Target would refuse the write for the absence
+        // of something it never touches - and the caller reads a refused write as a failed draw.
+        if (TextIsShared)
+        {
+            return _entity.Resolve() is { } shared
+                && WriteVariable(shared, null, _contract.RootPanelId, name, value);
+        }
+
         if (Target(slot) is not ({ } layout, { } player))
             return false;
 

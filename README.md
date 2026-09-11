@@ -150,6 +150,7 @@ A healthy start logs nothing.
 Panorama.Init(this);                                  // once, in Load
 Panorama.Shutdown();                                  // in Unload
 bool Panorama.CanReceiveClicks { get; }
+bool Panorama.CanWritePerPlayerText { get; }          // always true now - kept so callers compile
 bool Panorama.SetHideHud(CCSPlayerController player, HideHudFlags flags, bool hide);
 
 PanelHandle Panorama.Spawn(string layoutPath, LayoutContract? contract = null);

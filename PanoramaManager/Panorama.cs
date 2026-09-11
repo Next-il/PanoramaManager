@@ -113,16 +113,23 @@ public static class Panorama
         // hidden with a class.
         plugin.RegisterListener<Listeners.CheckTransmit>(OnCheckTransmit);
 
-        // Both ends of a slot's life, because neither one alone is reliable.
+        // Both ends of a slot's life, and they no longer do the same job.
         //
         // Every scrap of per-player state - reveal class, dialog variables, input capture - lives in
         // m_vecPlayerLayoutStates[SLOT] on an entity the engine preserves across round restarts, so
         // it is inherited by whoever takes the slot next and lasts the whole map. The disconnect
         // EVENT is not enough to clear it: CS2 routinely delivers it with a null or already-invalid
         // Userid, and the handler cannot then name a slot. OnClientDisconnect is handed the slot as
-        // an int and always fires. OnClientPutInServer is the other half of belt-and-braces - it
-        // clears on the way IN, which also covers state left behind by a crash, a map change or a
-        // plugin reload, none of which produce a disconnect this library ever sees.
+        // an int and always fires, and it is what drops this library's OWN state for the slot -
+        // the session and any prompt routing that slot's chat.
+        //
+        // The entity writes are the half that changed. CounterStrikeSharp's setters are keyed on the
+        // controller rather than the slot, so a clear that runs once the controller has gone has
+        // nowhere to land, where the old hand-computed state address did not care. That makes
+        // OnClientPutInServer the end that always lands, and no longer merely belt-and-braces: it is
+        // what actually wipes the entity state, on the way IN - which also covers state left behind
+        // by a crash, a map change or a plugin reload, none of which produce a disconnect this
+        // library ever sees.
         plugin.RegisterListener<Listeners.OnClientDisconnect>(ResetSlot);
         plugin.RegisterListener<Listeners.OnClientPutInServer>(ResetSlot);
 
@@ -364,7 +371,7 @@ public static class Panorama
         // genuinely differs - but only if each block says whose it is.
         var owner = _plugin?.ModuleName ?? "?";
 
-        command.ReplyToCommand($"[Panorama/{owner}] click channel:   {(CanReceiveClicks ? "installed" : "NOT INSTALLED - clicks will not arrive")}");
+        command.ReplyToCommand($"[Panorama/{owner}] click channel:   {DescribeClickChannel()}");
         command.ReplyToCommand($"[Panorama/{owner}] live menus:      {Handles.Count}");
 
         foreach (var handle in Handles)
@@ -382,6 +389,26 @@ public static class Panorama
             foreach (var line in handle.DescribeSlots())
                 command.ReplyToCommand($"[Panorama/{owner}]     {line}");
         }
+    }
+
+    /// <summary>
+    /// The click channel, plus when it last actually delivered something.
+    ///
+    /// <para>"Installed" stopped being a question worth asking on its own: CounterStrikeSharp's
+    /// listener registration cannot fail, so that half of the line can only ever say yes. It used to
+    /// be able to say no, when the channel was a signature-scanned detour, and this line was how you
+    /// saw it. What can still break is the dispatch, and the only honest evidence either way is
+    /// whether a click has ever arrived - which is exactly what "the menu renders but does nothing"
+    /// needs answered.</para>
+    /// </summary>
+    private static string DescribeClickChannel()
+    {
+        if (_transport?.IsInstalled != true)
+            return "NOT INSTALLED - clicks will not arrive";
+
+        return _lastInteractionAt is { } at
+            ? $"installed, last click {(int) (DateTime.UtcNow - at).TotalSeconds}s ago"
+            : "installed, no click seen yet";
     }
 
     /// <summary>
@@ -522,8 +549,13 @@ public static class Panorama
 
     internal static void Forget(PanelHandle handle) => Handles.Remove(handle);
 
+    /// <summary>When this context last had a click delivered to it. Read by css_panorama_diag.</summary>
+    private static DateTime? _lastInteractionAt;
+
     private static void Dispatch(RawInteraction raw)
     {
+        _lastInteractionAt = DateTime.UtcNow;
+
         // Handles are asked in creation order and the first that claims the click wins. A handle
         // claims it only if the clicked layout entity is its own, so several menus can be open at
         // once - one entity per layout path - without stealing each other's clicks.
