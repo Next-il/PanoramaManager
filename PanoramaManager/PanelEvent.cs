@@ -22,13 +22,18 @@ public enum PanelAction
     Button,
 
     /// <summary>
-    /// The menu was rebuilt after the layout entity was destroyed - a round restart, typically - and
-    /// is interactive again on the same page.
+    /// The library redrew an open menu on its own - after a round restart or map change, or when the
+    /// viewer respawned - and it is interactive again on the same page.
     ///
     /// <para>Rows, title and variables set through the handle are restored automatically. Anything
     /// written with <see cref="PanelHandle.SetVariableFor"/> or
     /// <see cref="PanelHandle.SetClassFor"/> is not: the library never saw what it meant, so only the
-    /// consumer can redraw it. Handle this if your menu is anything other than a plain list.</para>
+    /// consumer can redraw it - and the redraw un-hides every row it draws, so a row collapsed with
+    /// <see cref="PanelHandle.SetClassFor"/> comes back until the consumer collapses it again. Handle
+    /// this if your menu is anything other than a plain list.</para>
+    ///
+    /// <para>It can arrive twice in a row - a round restart respawns everyone as well - so the handler
+    /// should be a plain redraw rather than anything that acts once.</para>
     /// </summary>
     Restored,
 }

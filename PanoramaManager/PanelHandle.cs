@@ -1407,12 +1407,13 @@ public sealed class PanelHandle : IDisposable
                     Id, player.PlayerName);
             }
 
+            // Flags before Restored, the order Restore uses. A consumer may close from its handler -
+            // on a render that throws, or on a Restored it holds no state for - and Close restores
+            // the flags; hiding them after that leaves the player with no crosshair and no panel.
+            ApplyHudFlags(player, hide: true);
+
             Raise(player, PanelAction.Restored, _contract.RootPanelId, null, session.Page, Array.Empty<string>());
         }
-
-        if (_contract.HideHud == HideHudFlags.None) return;
-
-        ApplyHudFlags(player, hide: true);
     }
 
     /// <summary>
