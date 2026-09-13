@@ -102,10 +102,27 @@ cannot take a keystroke.
 dotnet add package PanoramaManager
 ```
 
-The DLL copies next to your plugin on build - which is what CounterStrikeSharp needs, since each
-plugin loads through a context that probes its own directory. There is no gamedata file to install;
-the engine side is CounterStrikeSharp's, so keeping it current after a CS2 update means updating
-CounterStrikeSharp.
+The DLL has to sit next to your plugin - each CounterStrikeSharp plugin loads through a context that
+probes its own directory. A plugin is a class library, and a class library does not copy package DLLs
+on build unless `CopyLocalLockFileAssemblies` is `true`. That compiles fine and then fails to load on
+the server. Turning the property on works, but copies every other package's runtime DLLs as well -
+CounterStrikeSharp.API's whole dependency tree, unless that reference has `ExcludeAssets="runtime"`.
+This copies only PanoramaManager:
+
+```xml
+<Target Name="CopyPanoramaManager" AfterTargets="ResolveLockFileCopyLocalFiles">
+  <ItemGroup>
+    <ReferenceCopyLocalPaths Include="@(RuntimeCopyLocalItems)"
+                             Condition="'%(RuntimeCopyLocalItems.NuGetPackageId)' == 'PanoramaManager'" />
+  </ItemGroup>
+</Target>
+```
+
+Your `CounterStrikeSharp.API` reference has to be 1.0.374 or newer. The package declares that, so a
+lower pin fails restore with NU1605 rather than failing on the server.
+
+There is no gamedata file to install; the engine side is CounterStrikeSharp's, so keeping it current
+after a CS2 update means updating CounterStrikeSharp.
 
 Then, on the server:
 
