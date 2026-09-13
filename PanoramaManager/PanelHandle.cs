@@ -1393,13 +1393,21 @@ public sealed class PanelHandle : IDisposable
         // entity may or may not be in - so a panel that was open across the death can come back to
         // a client that has thrown it away, or never re-applied the per-slot state it was sent
         // while it had no entity. This writes the library's own state again (reveal class, title,
-        // rows, page); consumers keep their own writes, which is why no Restored is raised here -
-        // some consumers close a panel on a Restored they hold no viewer for.
-        if (_sessions.TryGetValue(player.Slot, out var session) && !Render(session))
+        // rows, page) and therefore overwrites the consumer's: RenderRows sets the hidden class on
+        // every row it draws, so a row the consumer had collapsed per viewer comes back as a blank
+        // strip. Restored is raised for the same reason the world-reset path raises it, and under
+        // the same precondition - a live session for a valid player - so a consumer that closes on
+        // a Restored it holds no viewer for is not reached here either.
+        if (_sessions.TryGetValue(player.Slot, out var session))
         {
-            _logger.LogWarning(
-                "[Panorama] menu {MenuId} could not be redrawn for {Player} after a respawn.",
-                Id, player.PlayerName);
+            if (!Render(session))
+            {
+                _logger.LogWarning(
+                    "[Panorama] menu {MenuId} could not be redrawn for {Player} after a respawn.",
+                    Id, player.PlayerName);
+            }
+
+            Raise(player, PanelAction.Restored, _contract.RootPanelId, null, session.Page, Array.Empty<string>());
         }
 
         if (_contract.HideHud == HideHudFlags.None) return;
