@@ -27,14 +27,6 @@ internal sealed class PanelEntity
 
     private uint? _index;
 
-    /// <summary>True once this instance has spawned the entity itself, as opposed to adopting one
-    /// that was already in the world. Only used to decide whether an adoption is worth a word.</summary>
-    private bool _spawnedHere;
-
-    /// <summary>One warning per instance - adoption is routine, the first one is the interesting
-    /// one, and repeating it every resolve would bury it.</summary>
-    private bool _warnedForeignAdoption;
-
     /// <summary>Set when the layout path did not read back off an entity we spawned ourselves.
     /// Identity then falls back to the index we spawned - see <see cref="Create"/>.</summary>
     private bool _identityUnreadable;
@@ -178,23 +170,10 @@ internal sealed class PanelEntity
         if ((FromSharedIndex() ?? All().FirstOrDefault(IsOurs)) is not { } adopted)
             return null;
 
-        // Entities are shared per layout path across load contexts now that identity is read off
-        // m_strLayout instead of a per-context index map. Adopting one this plugin never spawned is
-        // the intended fix for a reload orphan - and it is also the only visible sign that a SECOND
-        // plugin is driving the same layout. Both would write the same per-player state, and both
-        // decide independently, in their own CheckTransmit, whether the shared entity reaches a
-        // viewer, so one plugin's hide cancels the other's show. Symptom with no line here: an open
-        // menu silently stops being drawn while every piece of server-side state reads healthy.
-        if (!_spawnedHere && !_warnedForeignAdoption)
-        {
-            _warnedForeignAdoption = true;
-
-            _logger.LogWarning(
-                "[Panorama] adopted {ClassName} idx {Index} for layout '{Layout}', which this menu did "
-                + "not spawn - a reload orphan, a second menu on the same layout, or another plugin "
-                + "driving it.",
-                ClassName, adopted.Index, _layoutPath);
-        }
+        // Routine: entities are shared per layout path, so reopening a menu, a reload, or another
+        // plugin on the same layout all land here.
+        _logger.LogDebug(
+            "[Panorama] Adopted {ClassName} index={Index} layout='{Layout}'", ClassName, adopted.Index, _layoutPath);
 
         _index = adopted.Index;
         SharedIndices()[_layoutPath] = adopted.Index;
@@ -290,8 +269,7 @@ internal sealed class PanelEntity
             return null;
         }
 
-        _spawnedHere = true;
-        _index       = entity.Index;
+        _index = entity.Index;
 
         // Before anything else can resolve this layout, so another plugin opening a menu later in
         // this tick adopts this entity rather than spawning a second one. See FromSharedIndex.
