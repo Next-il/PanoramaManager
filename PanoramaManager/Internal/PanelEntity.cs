@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using CounterStrikeSharp.API;
@@ -174,7 +175,7 @@ internal sealed class PanelEntity
     /// </summary>
     private CCSCustomHudLayout? Adopt()
     {
-        if (All().FirstOrDefault(IsOurs) is not { } adopted)
+        if ((FromSharedIndex() ?? All().FirstOrDefault(IsOurs)) is not { } adopted)
             return null;
 
         // Entities are shared per layout path across load contexts now that identity is read off
@@ -196,7 +197,61 @@ internal sealed class PanelEntity
         }
 
         _index = adopted.Index;
+        SharedIndices()[_layoutPath] = adopted.Index;
         return adopted;
+    }
+
+    /// <summary>
+    /// The <see cref="AppDomain"/> data slot holding the last known entity index per layout path.
+    /// One AppDomain serves every load context, so every plugin's copy of this library reads the
+    /// same dictionary. The value only uses framework types, which exist once per process, so the
+    /// cast back works in any context. The version is in the slot name so that a change of shape
+    /// gets a new slot instead of a bad cast.
+    /// </summary>
+    private const string SharedIndexSlot = "PanoramaManager.LayoutEntities.v1";
+
+    private static ConcurrentDictionary<string, uint>? s_sharedIndices;
+
+    /// <summary>
+    /// The entity another load context spawned for this layout, looked up by the index it recorded
+    /// rather than found by walking the entity list.
+    ///
+    /// <para>The walk misses an entity spawned earlier in the same tick. Two plugins opening menus
+    /// in the same tick then each spawned an entity for one layout, and the client draws only one of
+    /// them: the first plugin's, which the claim had just closed. The player was left with the
+    /// second menu live (cursor held, clicks answered) behind a card playing its close animation.
+    /// The index is only a hint. It passes the same checks as our own cached index, so a stale or
+    /// recycled entry is rejected and the walk runs as before.</para>
+    /// </summary>
+    private CCSCustomHudLayout? FromSharedIndex()
+    {
+        if (!SharedIndices().TryGetValue(_layoutPath, out var index))
+            return null;
+
+        var entity = Utilities.GetEntityFromIndex<CCSCustomHudLayout>((int) index);
+
+        return entity is { IsValid: true } && entity.DesignerName == ClassName && IsOurs(entity)
+            ? entity
+            : null;
+    }
+
+    private static ConcurrentDictionary<string, uint> SharedIndices()
+    {
+        if (s_sharedIndices is { } cached)
+            return cached;
+
+        // First caller creates the dictionary and every later one adopts it. Plugins load one at a
+        // time on the main thread, but re-read after writing anyway: a second dictionary would split
+        // the server into two groups that cannot see each other's entities.
+        if (AppDomain.CurrentDomain.GetData(SharedIndexSlot) is not ConcurrentDictionary<string, uint> shared)
+        {
+            AppDomain.CurrentDomain.SetData(SharedIndexSlot, new ConcurrentDictionary<string, uint>());
+
+            shared = AppDomain.CurrentDomain.GetData(SharedIndexSlot) as ConcurrentDictionary<string, uint>
+                     ?? new ConcurrentDictionary<string, uint>();
+        }
+
+        return s_sharedIndices = shared;
     }
 
     private static IEnumerable<CCSCustomHudLayout> All()
@@ -237,6 +292,10 @@ internal sealed class PanelEntity
 
         _spawnedHere = true;
         _index       = entity.Index;
+
+        // Before anything else can resolve this layout, so another plugin opening a menu later in
+        // this tick adopts this entity rather than spawning a second one. See FromSharedIndex.
+        SharedIndices()[_layoutPath] = entity.Index;
 
         // Read the path back off the entity we just spawned. Identity is a string compare against
         // m_strLayout now and EVERYTHING hangs off it - resolve, adopt, IsAlive, the duplicate
