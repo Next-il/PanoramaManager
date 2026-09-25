@@ -1285,15 +1285,21 @@ public sealed class PanelHandle : IDisposable
     /// spawn hook rather than reapplied on a timer, because spawning is the only thing that drops
     /// them.</para>
     /// </summary>
-    /// <summary>Drops this menu's input capture for a slot, whatever the session state. The
-    /// last resort behind css_cursor.</summary>
+    /// <summary>Drops the input capture this menu took for a slot, whatever the session state.
+    /// Behind the close and spawn sweeps in <see cref="Panorama.ReleaseInputIfIdle"/>.</summary>
     internal void ForceReleaseInput(int slot)
     {
+        // Only capture THIS handle took. The entity is shared per layout path across plugins, and
+        // the sweep calling this sees only its own plugin's sessions - so "idle" there says nothing
+        // about another plugin that has a menu open for this slot on the same entity. Releasing
+        // unconditionally turned every close and every respawn in one plugin into a dropped cursor
+        // over another plugin's open menu. A leaked handle still took its capture through
+        // SetCapture, so it is still in _captureHeld and still released here.
+        //
         // Guarded on the entity for the same reason ResetSlot is: the renderer resolves by
         // SPAWNING, so an unguarded release builds a custom_hud_layout for a menu nobody has ever
-        // opened in order to tell it to stop capturing input it was never capturing. This runs on
-        // every close and every spawn, across every handle, so that was a steady drip of entities.
-        if (_contract.CaptureInput && _renderer.IsEntityAlive())
+        // opened in order to tell it to stop capturing input it was never capturing.
+        if (_contract.CaptureInput && _captureHeld.Contains(slot) && _renderer.IsEntityAlive())
             SetCapture(slot, false);
     }
 

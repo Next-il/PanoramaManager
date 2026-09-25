@@ -720,14 +720,20 @@ public static class Panorama
 
             var slot = player.Slot;
 
+            // Every hide first, then every show, so show wins. Handles share one entity per layout
+            // path - one handle per player is the normal shape - and deciding per handle in list
+            // order let a later handle with no session for this slot take away the entity an
+            // earlier one had just added for it.
             foreach (var handle in Handles)
             {
-                // Show wins over hide, and the two are mutually exclusive anyway - both are keyed
-                // on the same session lookup, from opposite sides.
+                if (handle.EntityToHideFrom(slot) is { } index)
+                    info.TransmitEntities.Remove((int) index);
+            }
+
+            foreach (var handle in Handles)
+            {
                 if (handle.EntityToShowTo(slot) is { } shown)
                     info.TransmitEntities.Add((int) shown);
-                else if (handle.EntityToHideFrom(slot) is { } index)
-                    info.TransmitEntities.Remove((int) index);
             }
         }
     }

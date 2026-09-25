@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using CounterStrikeSharp.API;
@@ -25,14 +26,6 @@ internal sealed class PanelEntity
     private readonly ILogger _logger;
 
     private uint? _index;
-
-    /// <summary>True once this instance has spawned the entity itself, as opposed to adopting one
-    /// that was already in the world. Only used to decide whether an adoption is worth a word.</summary>
-    private bool _spawnedHere;
-
-    /// <summary>One warning per instance - adoption is routine, the first one is the interesting
-    /// one, and repeating it every resolve would bury it.</summary>
-    private bool _warnedForeignAdoption;
 
     /// <summary>Set when the layout path did not read back off an entity we spawned ourselves.
     /// Identity then falls back to the index we spawned - see <see cref="Create"/>.</summary>
@@ -174,29 +167,70 @@ internal sealed class PanelEntity
     /// </summary>
     private CCSCustomHudLayout? Adopt()
     {
-        if (All().FirstOrDefault(IsOurs) is not { } adopted)
+        if ((FromSharedIndex() ?? All().FirstOrDefault(IsOurs)) is not { } adopted)
             return null;
 
-        // Entities are shared per layout path across load contexts now that identity is read off
-        // m_strLayout instead of a per-context index map. Adopting one this plugin never spawned is
-        // the intended fix for a reload orphan - and it is also the only visible sign that a SECOND
-        // plugin is driving the same layout. Both would write the same per-player state, and both
-        // decide independently, in their own CheckTransmit, whether the shared entity reaches a
-        // viewer, so one plugin's hide cancels the other's show. Symptom with no line here: an open
-        // menu silently stops being drawn while every piece of server-side state reads healthy.
-        if (!_spawnedHere && !_warnedForeignAdoption)
-        {
-            _warnedForeignAdoption = true;
-
-            _logger.LogWarning(
-                "[Panorama] adopted {ClassName} idx {Index} for layout '{Layout}', which this menu did "
-                + "not spawn - a reload orphan, a second menu on the same layout, or another plugin "
-                + "driving it.",
-                ClassName, adopted.Index, _layoutPath);
-        }
+        // Routine: entities are shared per layout path, so reopening a menu, a reload, or another
+        // plugin on the same layout all land here.
+        _logger.LogDebug(
+            "[Panorama] Adopted {ClassName} index={Index} layout='{Layout}'", ClassName, adopted.Index, _layoutPath);
 
         _index = adopted.Index;
+        SharedIndices()[_layoutPath] = adopted.Index;
         return adopted;
+    }
+
+    /// <summary>
+    /// The <see cref="AppDomain"/> data slot holding the last known entity index per layout path.
+    /// One AppDomain serves every load context, so every plugin's copy of this library reads the
+    /// same dictionary. The value only uses framework types, which exist once per process, so the
+    /// cast back works in any context. The version is in the slot name so that a change of shape
+    /// gets a new slot instead of a bad cast.
+    /// </summary>
+    private const string SharedIndexSlot = "PanoramaManager.LayoutEntities.v1";
+
+    private static ConcurrentDictionary<string, uint>? s_sharedIndices;
+
+    /// <summary>
+    /// The entity another load context spawned for this layout, looked up by the index it recorded
+    /// rather than found by walking the entity list.
+    ///
+    /// <para>The walk misses an entity spawned earlier in the same tick. Two plugins opening menus
+    /// in the same tick then each spawned an entity for one layout, and the client draws only one of
+    /// them: the first plugin's, which the claim had just closed. The player was left with the
+    /// second menu live (cursor held, clicks answered) behind a card playing its close animation.
+    /// The index is only a hint. It passes the same checks as our own cached index, so a stale or
+    /// recycled entry is rejected and the walk runs as before.</para>
+    /// </summary>
+    private CCSCustomHudLayout? FromSharedIndex()
+    {
+        if (!SharedIndices().TryGetValue(_layoutPath, out var index))
+            return null;
+
+        var entity = Utilities.GetEntityFromIndex<CCSCustomHudLayout>((int) index);
+
+        return entity is { IsValid: true } && entity.DesignerName == ClassName && IsOurs(entity)
+            ? entity
+            : null;
+    }
+
+    private static ConcurrentDictionary<string, uint> SharedIndices()
+    {
+        if (s_sharedIndices is { } cached)
+            return cached;
+
+        // First caller creates the dictionary and every later one adopts it. Plugins load one at a
+        // time on the main thread, but re-read after writing anyway: a second dictionary would split
+        // the server into two groups that cannot see each other's entities.
+        if (AppDomain.CurrentDomain.GetData(SharedIndexSlot) is not ConcurrentDictionary<string, uint> shared)
+        {
+            AppDomain.CurrentDomain.SetData(SharedIndexSlot, new ConcurrentDictionary<string, uint>());
+
+            shared = AppDomain.CurrentDomain.GetData(SharedIndexSlot) as ConcurrentDictionary<string, uint>
+                     ?? new ConcurrentDictionary<string, uint>();
+        }
+
+        return s_sharedIndices = shared;
     }
 
     private static IEnumerable<CCSCustomHudLayout> All()
@@ -235,8 +269,11 @@ internal sealed class PanelEntity
             return null;
         }
 
-        _spawnedHere = true;
-        _index       = entity.Index;
+        _index = entity.Index;
+
+        // Before anything else can resolve this layout, so another plugin opening a menu later in
+        // this tick adopts this entity rather than spawning a second one. See FromSharedIndex.
+        SharedIndices()[_layoutPath] = entity.Index;
 
         // Read the path back off the entity we just spawned. Identity is a string compare against
         // m_strLayout now and EVERYTHING hangs off it - resolve, adopt, IsAlive, the duplicate
