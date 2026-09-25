@@ -205,6 +205,7 @@ class LayoutContract
     string? RevealClass;      // set for an animated layout instead of collapse-to-hide
     bool    CaptureInput;     // false for anything the player only reads
     HideHudFlags HideHud;     // hidden while open, restored on close
+    bool    RefuseWhileSpectating; // off: spectators open menus normally
     // plus the id and class names the library drives
 }
 ```

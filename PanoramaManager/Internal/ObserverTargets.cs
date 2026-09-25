@@ -7,15 +7,20 @@ namespace PanoramaManager.Internal;
 /// <summary>
 /// Answers one question: is this player looking at the world through somebody ELSE's eyes?
 ///
-/// <para><b>Why the library cares.</b> The CS2 client resolves a <c>custom_hud_layout</c>'s
-/// per-player panel state through the player it is currently OBSERVING, not through the local
-/// client - <c>CCSCustomHudLayoutState</c> carries <c>m_playerSlot</c> precisely so a consumer can
-/// match by slot value rather than by "mine". So a dead viewer in-eye of a team-mate has their
-/// panel drawn from the TARGET's slot, which has nothing on it, and nothing appears. Input capture
-/// is read from their own slot and still applies, which is the exact reported symptom: a cursor
-/// over an empty screen, with a server-side render that looks perfect. Confirmed in game - a dead
-/// player spectating someone else saw THAT player's menu and toast, which is also why
-/// <see cref="LayoutContract.HideFromSpectators"/> exists.</para>
+/// <para><b>Why the library cared.</b> Until CS2 build 2000908 (2026-09-09) the client resolved a
+/// <c>custom_hud_layout</c>'s per-player panel state through the player being OBSERVED rather than
+/// the local client. A dead viewer in-eye of a team-mate had their panel drawn from the TARGET's
+/// slot, which has nothing on it, so nothing appeared - while input capture, read from their own
+/// slot, still applied: a cursor over an empty screen with a server-side render that looked
+/// perfect. Confirmed in game at the time, a dead player spectating someone else saw THAT player's
+/// menu and toast, which is why <see cref="LayoutContract.HideFromSpectators"/> exists.</para>
+///
+/// <para><b>What changed.</b> Build 2000908 added the <c>observable</c> keyvalue - "controls whether
+/// an observer sees the UI as the spectated player sees it. Defaults to false" - and
+/// <c>PanelEntity</c> spawns with it false, so an observer is drawn their own state. This is now a
+/// diagnostic (<c>css_panorama_diag</c> prints WATCHING slot N) and the input to the opt-in
+/// <see cref="LayoutContract.RefuseWhileSpectating"/>, not something the library acts on by
+/// itself.</para>
 ///
 /// <para>Not a transmit problem. Forcing the entity into the viewer's transmit list was tried and
 /// changed nothing; the entity is on their client, its state is complete, and the client reads the

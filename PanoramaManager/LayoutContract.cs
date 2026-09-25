@@ -66,6 +66,11 @@ public sealed class LayoutContract
     /// it: with no entity there is nothing to render, whichever slot the client would have read.
     /// Note the test is "has a session", NOT "is alive" - blocking dead players instead is the
     /// obvious approach and it breaks the case where a dead player opens a menu themselves.</para>
+    ///
+    /// <para>Belt-and-braces since CS2 build 2000908 (2026-09-09), which added the <c>observable</c>
+    /// keyvalue and made showing the spectated player's UI opt-in; <c>PanelEntity</c> spawns with it
+    /// false. Kept on by default because it costs a spectator nothing and still holds for an entity
+    /// this library adopted rather than spawned.</para>
     /// </summary>
     public bool HideFromSpectators { get; init; } = true;
 
@@ -85,6 +90,24 @@ public sealed class LayoutContract
     /// </summary>
     public string? SpectatingMessage { get; init; } =
         "You can't open this while you're watching another player - try again after you respawn.";
+
+    /// <summary>
+    /// Whether to refuse <see cref="PanelHandle.Open"/> for a viewer who is watching another player.
+    /// Default false: they open normally.
+    ///
+    /// <para><b>Why this is off.</b> It existed because the client used to resolve per-player state
+    /// through the player being OBSERVED, so a spectating viewer was drawn the TARGET's state and saw
+    /// nothing of their own. CS2 build 2000908 (2026-09-09) made that opt-in through the
+    /// <c>observable</c> keyvalue - "controls whether an observer sees the UI as the spectated player
+    /// sees it. Defaults to false" - and <c>PanelEntity</c> spawns with it false, so the case the
+    /// refusal was written for no longer happens. It shipped three days before that update and spent
+    /// its whole life refusing opens the engine would by then have drawn correctly.</para>
+    ///
+    /// <para>Set it true only if a CS2 update reintroduces the behaviour: the symptom is a cursor
+    /// with no panel for a dead viewer, and <c>css_panorama_diag</c> naming a WATCHING slot.
+    /// <see cref="SpectatingMessage"/> is what the refusal says.</para>
+    /// </summary>
+    public bool RefuseWhileSpectating { get; init; }
 
     /// <summary>
     /// Whether every viewer sees the same text, so writes may use the global dialog-variable

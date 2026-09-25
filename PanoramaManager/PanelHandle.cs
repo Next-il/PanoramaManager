@@ -286,19 +286,20 @@ public sealed class PanelHandle : IDisposable
         if (player is not { IsValid: true })
             return;
 
-        // Refused rather than drawn into a screen that cannot show it.
+        // OFF unless the consumer asks for it - see LayoutContract.RefuseWhileSpectating.
         //
-        // The client resolves this entity's per-player state through the player it is OBSERVING,
-        // not through the local client, so a viewer in-eye of somebody else gets the panel drawn
-        // from the TARGET's slot - empty - while input capture comes from their own slot and works.
-        // The result is a cursor over nothing, with no close button to escape with, and a server
-        // side that looks perfect: css_panorama_diag reports a complete, correct render. See
-        // ObserverTargets for the evidence, and note this is NOT a transmission problem - forcing
-        // the entity into the viewer's transmit list was tried and changed nothing.
+        // Until CS2 build 2000908 (2026-09-09) the client resolved this entity's per-player state
+        // through the player being OBSERVED, so a viewer in-eye of somebody else got the panel drawn
+        // from the TARGET's slot - empty - while input capture came from their own slot and worked:
+        // a cursor over nothing, no close button to escape with, and a server side that looked
+        // perfect. That build added the "observable" keyvalue, which controls exactly this and
+        // defaults to false, and PanelEntity now spawns with it explicitly false. An observer is no
+        // longer shown the spectated player's UI, so refusing by default only blocked opens the
+        // engine would have drawn correctly - which is what it did on live servers for 20 days.
         //
-        // Only for layouts that take the mouse. A read-only toast or bar that a spectating viewer
-        // cannot see costs them nothing and strands nobody, so those open exactly as before.
-        if (_contract.CaptureInput && ObserverTargets.ObservedSlot(player) is { } watchedSlot)
+        // Only for layouts that take the mouse. A read-only toast or bar strands nobody either way.
+        if (_contract.RefuseWhileSpectating && _contract.CaptureInput
+            && ObserverTargets.ObservedSlot(player) is { } watchedSlot)
         {
             _logger.LogInformation(
                 "[Panorama] {Player} tried to open menu {MenuId} while watching slot {Watched}; "

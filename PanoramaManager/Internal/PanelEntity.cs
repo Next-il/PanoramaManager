@@ -264,6 +264,14 @@ internal sealed class PanelEntity
             kv.SetVector("origin", 0f, 0f, 0f); // HUD manager entity, position is irrelevant.
             kv.SetString("layout", _layoutPath);
 
+            // Explicit, though false is already the default. CS2 build 2000908 (2026-09-09) added
+            // this: "controls whether an observer sees the UI as the spectated player sees it.
+            // Defaults to false". True is the pre-2000908 behaviour, where a spectator was drawn
+            // the WATCHED player's state - their menu, their toast, their private announcement -
+            // and a viewer could never see their own panel while in-eye of somebody else. Stated
+            // here so a future change of default cannot quietly reintroduce that.
+            kv.SetBool("observable", false);
+
             entity.DispatchSpawn(kv);
         }
 
