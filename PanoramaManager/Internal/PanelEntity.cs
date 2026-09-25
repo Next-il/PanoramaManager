@@ -171,8 +171,12 @@ internal sealed class PanelEntity
             return null;
 
         // Routine: entities are shared per layout path, so reopening a menu, a reload, or another
-        // plugin on the same layout all land here.
-        _logger.LogDebug(
+        // plugin on the same layout all land here. Information rather than Debug because it is also
+        // the only server-side sign that a SECOND plugin is driving this layout - the case where one
+        // plugin's CheckTransmit still cancels another's, which this release does not fix across
+        // load contexts, and which reads as "the menu silently stopped drawing" with nothing else
+        // to go on. Debug is off on a live server, which is exactly where that question gets asked.
+        _logger.LogInformation(
             "[Panorama] Adopted {ClassName} index={Index} layout='{Layout}'", ClassName, adopted.Index, _layoutPath);
 
         _index = adopted.Index;
