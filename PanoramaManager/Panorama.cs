@@ -41,27 +41,34 @@ public static class Panorama
 {
     private static readonly List<PanelHandle> Handles = new();
 
-    /// <summary>Entity and slot pairs that were closed a moment ago, and until when the entity keeps
-    /// reaching that slot regardless of which handle asks to hide it. See PanelHandle.Close.</summary>
-    private static readonly Dictionary<(uint Index, int Slot), DateTime> ClosingUntil = new();
+    /// <summary>
+    /// Layout and slot pairs that were closed a moment ago, and until when that layout's entity keeps
+    /// reaching the slot regardless of which handle asks to hide it. See PanelHandle.CloseTransmitGrace.
+    ///
+    /// <para>Keyed by layout path, not entity index. The path is what the entity is shared by - every
+    /// handle on one path drives the same entity - and it is known at every close, where the index is
+    /// not: a world reset forgets the index while the entity survives, and the scrub after the hold
+    /// either re-adopts it or defers to the next frame. Keyed by index, that hold was recorded against
+    /// nothing and the scrub never shipped. It also bounds this map at layouts times slots, where
+    /// indices left behind by map changes would only ever have been removed by a read that never
+    /// comes.</para>
+    /// </summary>
+    private static readonly Dictionary<(string LayoutPath, int Slot), DateTime> ClosingUntil = new();
 
-    internal static void HoldForClose(uint? index, int slot, TimeSpan grace)
-    {
-        if (index is { } i)
-            ClosingUntil[(i, slot)] = DateTime.UtcNow + grace;
-    }
+    internal static void HoldForClose(string layoutPath, int slot, TimeSpan grace)
+        => ClosingUntil[(layoutPath, slot)] = DateTime.UtcNow + grace;
 
     /// <summary>Whether a recent close still needs the entity sent to this slot. Expired here rather
     /// than on a timer - the transmit hook is the only reader, and it runs every tick.</summary>
-    private static bool IsClosing(uint index, int slot)
+    private static bool IsClosing(string layoutPath, int slot)
     {
-        if (!ClosingUntil.TryGetValue((index, slot), out var until))
+        if (!ClosingUntil.TryGetValue((layoutPath, slot), out var until))
             return false;
 
         if (DateTime.UtcNow < until)
             return true;
 
-        ClosingUntil.Remove((index, slot));
+        ClosingUntil.Remove((layoutPath, slot));
         return false;
     }
 
@@ -750,7 +757,7 @@ public static class Panorama
             // earlier one had just added for it.
             foreach (var handle in Handles)
             {
-                if (handle.EntityToHideFrom(slot) is { } index && !IsClosing(index, slot))
+                if (handle.EntityToHideFrom(slot) is { } index && !IsClosing(handle.LayoutPath, slot))
                     info.TransmitEntities.Remove((int) index);
             }
 

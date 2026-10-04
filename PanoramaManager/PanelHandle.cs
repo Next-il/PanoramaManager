@@ -66,8 +66,9 @@ public sealed class PanelHandle : IDisposable
     private readonly Dictionary<int, bool> _pendingScrub = new();
 
     /// <summary>
-    /// Slots that were closed a moment ago, and the instant their layout entity may stop being sent
-    /// to them.
+    /// How long a closed slot keeps receiving the layout entity. Long enough for the hide to reach
+    /// the client and its exit animation to play, short enough that a player who closes a menu and
+    /// starts spectating is not shown the spectated player's panel for any noticeable time.
     ///
     /// <para>The hide a close writes is per-player state INSIDE the layout entity, and
     /// <see cref="EntityToHideFrom"/> stops that entity being transmitted to any slot with no
@@ -80,18 +81,12 @@ public sealed class PanelHandle : IDisposable
     ///
     /// <para>So keep sending the entity to the closing viewer for a moment longer. Their own state
     /// is already scrubbed, so they see the exit animation and then nothing; other viewers are
-    /// unaffected, since this is per slot. Entries expire where they are read.</para>
+    /// unaffected, since this is per slot.</para>
     ///
-    /// <para>Held in <see cref="Panorama"/>, per entity and slot, not on this handle: every handle on
+    /// <para>Held in <see cref="Panorama"/>, per layout and slot, not on this handle: every handle on
     /// the entity votes in the transmit hook, so a sibling with no session for the slot - another
     /// player's handle, or this menu's other input mode - used to take the entity away before the
     /// hide shipped, and a disposed handle took its grace with it.</para>
-    /// </summary>
-
-    /// <summary>
-    /// How long a closed slot keeps receiving the layout entity. Long enough for the hide to reach
-    /// the client and its exit animation to play, short enough that a player who closes a menu and
-    /// starts spectating is not shown the spectated player's panel for any noticeable time.
     /// </summary>
     private static readonly TimeSpan CloseTransmitGrace = TimeSpan.FromSeconds(1);
 
@@ -660,7 +655,9 @@ public sealed class PanelHandle : IDisposable
         // the panel is written into the layout entity's per-player state, and the transmit hook
         // stops sending that entity to a slot the instant it has no session - so without this the
         // writes below never reach the client and the panel stays on screen. See CloseTransmitGrace.
-        Panorama.HoldForClose(_renderer.EntityIndexIfSpawned, slot, CloseTransmitGrace);
+        // By layout path, not the entity index: the index may not be known yet, and the scrub below
+        // is what re-adopts the entity after a world reset forgot it.
+        Panorama.HoldForClose(LayoutPath, slot, CloseTransmitGrace);
 
         if (!_sessions.Remove(slot))
         {
@@ -1429,7 +1426,7 @@ public sealed class PanelHandle : IDisposable
     {
         // Same reason as Close: the scrub at the bottom is a write into the entity, and it only
         // reaches the client while the entity is still being transmitted to this slot.
-        Panorama.HoldForClose(_renderer.EntityIndexIfSpawned, slot, CloseTransmitGrace);
+        Panorama.HoldForClose(LayoutPath, slot, CloseTransmitGrace);
 
         _sessions.Remove(slot);
 
