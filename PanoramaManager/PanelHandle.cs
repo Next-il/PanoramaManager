@@ -80,10 +80,13 @@ public sealed class PanelHandle : IDisposable
     ///
     /// <para>So keep sending the entity to the closing viewer for a moment longer. Their own state
     /// is already scrubbed, so they see the exit animation and then nothing; other viewers are
-    /// unaffected, since this is per slot. Entries expire where they are read and are dropped
-    /// outright by the next Open.</para>
+    /// unaffected, since this is per slot. Entries expire where they are read.</para>
+    ///
+    /// <para>Held in <see cref="Panorama"/>, per entity and slot, not on this handle: every handle on
+    /// the entity votes in the transmit hook, so a sibling with no session for the slot - another
+    /// player's handle, or this menu's other input mode - used to take the entity away before the
+    /// hide shipped, and a disposed handle took its grace with it.</para>
     /// </summary>
-    private readonly Dictionary<int, DateTime> _closingUntil = new();
 
     /// <summary>
     /// How long a closed slot keeps receiving the layout entity. Long enough for the hide to reach
@@ -331,11 +334,6 @@ public sealed class PanelHandle : IDisposable
         // a new map it is guaranteed to have found nothing resolvable and left the entry queued.
         // Dropping it here is what stops that entry firing later, against this very panel.
         _pendingScrub.Remove(player.Slot);
-
-        // And it is not closing either - the session above already keeps the entity transmitting,
-        // so the grace has nothing left to do and an expiry left behind would only be read again
-        // after the next close sets a fresh one.
-        _closingUntil.Remove(player.Slot);
 
         // Take off every per-viewer class this handle previously turned on for this slot, BEFORE the
         // first draw. Close deliberately leaves them so the exit animation still has the panel's
@@ -661,8 +659,8 @@ public sealed class PanelHandle : IDisposable
         // Before the session goes, and on both branches below. Everything this method does to hide
         // the panel is written into the layout entity's per-player state, and the transmit hook
         // stops sending that entity to a slot the instant it has no session - so without this the
-        // writes below never reach the client and the panel stays on screen. See _closingUntil.
-        _closingUntil[slot] = DateTime.UtcNow + CloseTransmitGrace;
+        // writes below never reach the client and the panel stays on screen. See CloseTransmitGrace.
+        Panorama.HoldForClose(_renderer.EntityIndexIfSpawned, slot, CloseTransmitGrace);
 
         if (!_sessions.Remove(slot))
         {
@@ -1360,15 +1358,7 @@ public sealed class PanelHandle : IDisposable
         if (!_contract.HideFromSpectators) return null;
         if (_sessions.ContainsKey(slot)) return null;
 
-        // Recently closed: keep sending the entity so the hide that close wrote actually ships.
-        // Expired here rather than on a timer - this is the only reader, and it runs every tick.
-        if (_closingUntil.TryGetValue(slot, out var until))
-        {
-            if (DateTime.UtcNow < until) return null;
-
-            _closingUntil.Remove(slot);
-        }
-
+        // A recent close on this entity, by any handle, is honoured by the caller.
         return _renderer.EntityIndexIfSpawned;
     }
 
@@ -1439,7 +1429,7 @@ public sealed class PanelHandle : IDisposable
     {
         // Same reason as Close: the scrub at the bottom is a write into the entity, and it only
         // reaches the client while the entity is still being transmitted to this slot.
-        _closingUntil[slot] = DateTime.UtcNow + CloseTransmitGrace;
+        Panorama.HoldForClose(_renderer.EntityIndexIfSpawned, slot, CloseTransmitGrace);
 
         _sessions.Remove(slot);
 

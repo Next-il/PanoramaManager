@@ -41,6 +41,30 @@ public static class Panorama
 {
     private static readonly List<PanelHandle> Handles = new();
 
+    /// <summary>Entity and slot pairs that were closed a moment ago, and until when the entity keeps
+    /// reaching that slot regardless of which handle asks to hide it. See PanelHandle.Close.</summary>
+    private static readonly Dictionary<(uint Index, int Slot), DateTime> ClosingUntil = new();
+
+    internal static void HoldForClose(uint? index, int slot, TimeSpan grace)
+    {
+        if (index is { } i)
+            ClosingUntil[(i, slot)] = DateTime.UtcNow + grace;
+    }
+
+    /// <summary>Whether a recent close still needs the entity sent to this slot. Expired here rather
+    /// than on a timer - the transmit hook is the only reader, and it runs every tick.</summary>
+    private static bool IsClosing(uint index, int slot)
+    {
+        if (!ClosingUntil.TryGetValue((index, slot), out var until))
+            return false;
+
+        if (DateTime.UtcNow < until)
+            return true;
+
+        ClosingUntil.Remove((index, slot));
+        return false;
+    }
+
     private static BasePlugin?      _plugin;
     private static ILogger?         _logger;
     private static IPanelTransport?  _transport;
@@ -726,7 +750,7 @@ public static class Panorama
             // earlier one had just added for it.
             foreach (var handle in Handles)
             {
-                if (handle.EntityToHideFrom(slot) is { } index)
+                if (handle.EntityToHideFrom(slot) is { } index && !IsClosing(index, slot))
                     info.TransmitEntities.Remove((int) index);
             }
 
