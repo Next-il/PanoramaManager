@@ -710,33 +710,84 @@ public static class Panorama
     /// entity down on its own, which is the "my menu vanished a few seconds after I respawned"
     /// report. Anyone holding a session is told about the entity unconditionally.</para>
     /// </summary>
-    private static void OnCheckTransmit(CCheckTransmitInfoList infoList)
+    /// <summary>The handles that have an entity this tick, reused so the hook allocates nothing.</summary>
+    private static PanelHandle[] _transmitHandles = new PanelHandle[8];
+
+    /// <summary>Where a CCheckTransmitInfo keeps its player slot (CounterStrikeSharp's own gamedata key).</summary>
+    private static int _transmitSlotOffset = -1;
+
+    /// <summary>
+    /// Runs every tick, for every player, in every plugin that uses this library - with twenty HUD plugins on a
+    /// server that is twenty passes over the player list per tick, so it has to cost next to nothing.
+    ///
+    /// <para>The same decisions as before, made more cheaply. The list's enumerator builds a
+    /// <c>CCSPlayerController</c> per player (a native lookup and an allocation), and the validity check made a second
+    /// native call. Here the slot is read straight from the info, the way CounterStrikeSharp's own indexer reads it,
+    /// and no controller is made. A handle without an entity can neither hide nor show anything, so a plugin whose
+    /// layouts have not spawned yet returns before touching the list at all. (Live servers, 2026-11-23: about 10% of a
+    /// core more per server once players joined, after the HUD rollout put this hook in ~20 plugins.)</para>
+    /// </summary>
+    private static unsafe void OnCheckTransmit(CCheckTransmitInfoList infoList)
     {
         if (Handles.Count == 0) return;
 
-        foreach (var (info, player) in infoList)
+        var active = 0;
+        foreach (var handle in Handles)
         {
-            if (player is not { IsValid: true }) continue;
+            if (handle.SpawnedEntityIndex is null) continue;
+            if (active == _transmitHandles.Length) Array.Resize(ref _transmitHandles, active * 2);
+            _transmitHandles[active++] = handle;
+        }
 
-            var slot = player.Slot;
+        if (active == 0) return;
 
-            // Every hide first, then every show, so show wins. Handles share one entity per layout
-            // path - one handle per player is the normal shape - and deciding per handle in list
-            // order let a later handle with no session for this slot take away the entity an
-            // earlier one had just added for it.
-            foreach (var handle in Handles)
+        try
+        {
+            var count = infoList.Count;
+            if (count <= 0) return;
+
+            if (_transmitSlotOffset < 0) _transmitSlotOffset = GameData.GetOffset("CheckTransmitPlayerSlot");
+
+            var infos = *(nint**) infoList.Handle;
+            if (infos == null) return;
+
+            for (var i = 0; i < count; i++)
             {
-                if (handle.EntityToHideFrom(slot) is { } index)
-                    info.TransmitEntities.Remove((int) index);
-            }
+                var infoPtr = infos[i];
+                if (infoPtr == 0) continue;
 
-            foreach (var handle in Handles)
-            {
-                if (handle.EntityToShowTo(slot) is { } shown)
-                    info.TransmitEntities.Add((int) shown);
+                var slot = *(int*) ((byte*) infoPtr + _transmitSlotOffset);
+                if (slot is < 0 or >= MaxSlots) continue;
+
+                // A copy, like CounterStrikeSharp's own: the bit vector inside is a pointer to the live bits.
+                var info = *(CCheckTransmitInfo*) infoPtr;
+
+                // Every hide first, then every show, so show wins. Handles share one entity per layout
+                // path - one handle per player is the normal shape - and deciding per handle in list
+                // order let a later handle with no session for this slot take away the entity an
+                // earlier one had just added for it.
+                for (var h = 0; h < active; h++)
+                {
+                    if (_transmitHandles[h].EntityToHideFrom(slot) is { } index)
+                        info.TransmitEntities.Remove((int) index);
+                }
+
+                for (var h = 0; h < active; h++)
+                {
+                    if (_transmitHandles[h].EntityToShowTo(slot) is { } shown)
+                        info.TransmitEntities.Add((int) shown);
+                }
             }
         }
+        finally
+        {
+            // Not kept between ticks: a disposed handle must not stay reachable from here.
+            Array.Clear(_transmitHandles, 0, active);
+        }
     }
+
+    /// <summary>CS2's player slots: 0 to 63.</summary>
+    private const int MaxSlots = 64;
 
     private static void WorldReset()
     {

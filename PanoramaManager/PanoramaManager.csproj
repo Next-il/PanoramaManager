@@ -1,6 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Same assembly identity as the published 0.4.3, so it drops in beside every plugin built against it. -->
+    <InformationalVersion>0.4.3-next.transmit</InformationalVersion>
     <AssemblyName>PanoramaManager</AssemblyName>
     <RootNamespace>PanoramaManager</RootNamespace>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
