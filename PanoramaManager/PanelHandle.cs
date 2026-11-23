@@ -1341,6 +1341,9 @@ public sealed class PanelHandle : IDisposable
     /// <para>Called once per player per tick, so it does no work beyond a dictionary lookup and
     /// never spawns anything.</para>
     /// </summary>
+    /// <summary>This handle's entity index when it has one, without spawning; read once per tick by the transmit hook.</summary>
+    internal uint? SpawnedEntityIndex => _renderer.EntityIndexIfSpawned;
+
     internal uint? EntityToShowTo(int slot)
         => _sessions.ContainsKey(slot) ? _renderer.EntityIndexIfSpawned : null;
 
